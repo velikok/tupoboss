@@ -1,0 +1,119 @@
+{
+  "bot_token": "YOUR_BOT_TOKEN_HERE",
+  "admin_ids": [
+    1399524277
+  ],
+  "active_ai": "gemini",
+  "ai_providers": {
+    "gemini": {
+      "name": "Google Gemini",
+      "api_key": "",
+      "model": "gemini-3.8-flash",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
+    },
+    "openai": {
+      "name": "OpenAI (ChatGPT)",
+      "api_key": "",
+      "model": "gpt-4o",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "anthropic": {
+      "name": "Anthropic (Claude)",
+      "api_key": "",
+      "model": "claude-3-5-sonnet-20241022",
+      "base_url": "https://api.anthropic.com/v1"
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "api_key": "",
+      "model": "deepseek-chat",
+      "base_url": "https://api.deepseek.com"
+    },
+    "openrouter": {
+      "name": "OpenRouter",
+      "api_key": "",
+      "model": "google/gemini-2.0-flash-exp:free",
+      "base_url": "https://openrouter.ai/api/v1"
+    },
+    "custom": {
+      "name": "Свой API (Custom)",
+      "api_key": "",
+      "model": "default",
+      "base_url": ""
+    }
+  },
+  "ai_profiles": {
+    "gemini": {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "type": "gemini",
+      "model": "gemini-3.8-flash",
+      "api_key": "",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
+    },
+    "openai": {
+      "id": "openai",
+      "name": "OpenAI (ChatGPT)",
+      "type": "openai",
+      "model": "gpt-4o",
+      "api_key": "",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "anthropic": {
+      "id": "anthropic",
+      "name": "Anthropic (Claude)",
+      "type": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
+      "base_url": "https://api.anthropic.com/v1"
+    },
+    "deepseek": {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "type": "deepseek",
+      "model": "deepseek-chat",
+      "api_key": "",
+      "base_url": "https://api.deepseek.com"
+    },
+    "openrouter": {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "type": "openrouter",
+      "model": "google/gemini-2.0-flash-exp:free",
+      "api_key": "",
+      "base_url": "https://openrouter.ai/api/v1"
+    },
+    "custom": {
+      "id": "custom",
+      "name": "Свой API (Custom)",
+      "type": "custom",
+      "model": "default",
+      "api_key": "",
+      "base_url": ""
+    },
+    "prof_99da9850": {
+      "id": "prof_99da9850",
+      "name": "Google Gemini #7",
+      "type": "gemini",
+      "model": "gemini-3.8-flash",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key": ""
+    },
+    "prof_024eb0fd": {
+      "id": "prof_024eb0fd",
+      "name": "ernie",
+      "type": "custom",
+      "model": "ERNIE-5.5-Flash-Preview",
+      "base_url": "https://api.zveno.ai/v1",
+      "api_key": ""
+    },
+    "prof_49e206e8": {
+      "id": "prof_49e206e8",
+      "name": "NVIDIA: Nemotron 3 Ultra",
+      "type": "custom",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "base_url": "https://api.zveno.ai/v1",
+      "api_key": ""
+    }
+  },
+  "active_profile_id": "prof_49e206e8"
+}
