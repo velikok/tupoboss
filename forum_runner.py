@@ -56,10 +56,11 @@ def fetch_forum_data(section=None, skip_summaries=True):
             if has_threads:
                 _cache[cache_key] = (data, now)
             return data
-        return None
+        err_msg = res.stderr.strip()
+        return {"error": err_msg or "Пустой ответ от браузера (возможно, защита Cloudflare или отсутствует Chrome/Chromium на сервере)."}
     except Exception as e:
         print("Forum fetch error:", e)
-        return None
+        return {"error": str(e)}
 
 def extract_urgent_threads(in_prog_list, max_hours=5):
     urgent_list = []
@@ -80,6 +81,10 @@ def get_overdue_and_urgent_report():
     data = fetch_forum_data(skip_summaries=True)
     if not data:
         return "❌ Не удалось получить данные с форума. Попробуйте позже."
+    if "error" in data:
+        return f"❌ <b>Ошибка загрузки жалоб ГА на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
+    if "error" in data:
+        return f"❌ <b>Ошибка проверки форума на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
         
     has_overdue = False
     section_blocks = []
@@ -130,6 +135,8 @@ def get_ga_complaints_report():
     data = fetch_forum_data(section="admin_complaints", skip_summaries=False)
     if not data:
         return "❌ Не удалось получить данные с форума. Попробуйте позже."
+    if "error" in data:
+        return f"❌ <b>Ошибка загрузки жалоб ГА на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
         
     admin_sec = data.get("sections", {}).get("admin_complaints", {})
     ga_threads = admin_sec.get("ga_threads", [])
@@ -180,6 +187,8 @@ def get_full_forum_report():
     data = fetch_forum_data(skip_summaries=True)
     if not data:
         return "❌ Не удалось получить данные с форума. Попробуйте позже."
+    if "error" in data:
+        return f"❌ <b>Ошибка загрузки жалоб ГА на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
         
     total_overdue = sum(len(s.get("overdue", [])) for s in data.get("sections", {}).values())
     total_urgent = sum(len(extract_urgent_threads(s.get("in_progress", []))) for s in data.get("sections", {}).values())

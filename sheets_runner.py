@@ -59,10 +59,14 @@ def run_sheets_audit():
         return f"❌ Ошибка экспорта таблиц: {e}"
         
     if not os.path.exists(support_xlsx) or not os.path.exists(admin_xlsx):
-        err = r1.stderr or r2.stderr or "Неизвестная ошибка"
-        if "no credentials found" in err:
-            return "❌ Ошибка авторизации Google Таблиц. Выполните в терминале:\n<code>gsheets auth login</code>"
-        return f"❌ Не удалось получить файлы таблиц:\n<code>{err}</code>"
+        return (
+            "❌ <b>Не удалось скачать Google Таблицы на сервере (Ошибка 401: Ограниченный доступ).</b>\n\n"
+            "Таблицы защищены приватностью Google. Чтобы бот на сервере мог их читать:\n"
+            "1. Откройте обе таблицы в браузере.\n"
+            "2. В правом верхнем углу нажмите <b>«Поделиться» / «Настройки доступа»</b>.\n"
+            "3. Измените «Ограниченный доступ» на <b>«Все, у кого есть ссылка: Читатель»</b>.\n\n"
+            "После этого бот сможет загружать таблицы напрямую без авторизации!"
+        )
         
     # 2. Audit script
     audit_cmd = ["python", AUDIT_SCRIPT, "--support", support_xlsx, "--admin", admin_xlsx]

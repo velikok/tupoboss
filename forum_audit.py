@@ -117,6 +117,8 @@ def fetch_html(url, budget=1200, retries=2):
     cmd = [
         CHROME_PATH,
         "--headless=new",
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
         f"--user-data-dir={USER_DATA}",
         "--disable-gpu",
         "--disable-software-rasterizer",
