@@ -252,7 +252,6 @@ def build_ai_settings_content():
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     
-    # List of all configured profiles
     buttons = []
     for pid, prof in profiles.items():
         is_active = (pid == active_id)
@@ -267,7 +266,6 @@ def build_ai_settings_content():
         else:
             markup.add(buttons[i])
             
-    # Management buttons
     markup.add(types.InlineKeyboardButton("➕ Добавить новый API", callback_data="add_new_api_menu"))
     markup.add(types.InlineKeyboardButton("🔄 Обновить остаток лимита", callback_data="refresh_ai_limits"))
     markup.add(
@@ -293,7 +291,6 @@ def send_long_message(chat_id, text):
         for p in parts:
             bot.send_message(chat_id, p, disable_web_page_preview=True)
 
-# /start command
 @bot.message_handler(commands=['start', 'help'])
 def handle_start(message):
     if not is_admin(message.from_user.id):
@@ -321,7 +318,6 @@ def handle_alerts_cmd(message):
     info, markup = build_alerts_settings_content()
     bot.send_message(message.chat.id, info, reply_markup=markup)
 
-# Text button handlers
 @bot.message_handler(func=lambda m: is_admin(m.from_user.id) and m.text in [
     "📊 Проверить таблицы", "🚨 Просрочки на форуме", "👑 Жалобы ГА", "📑 Полный аудит форума", "⚙️ Настройки ИИ", "🔔 Авто-алерты"
 ])
@@ -377,14 +373,12 @@ def handle_menu_buttons(message):
         info, markup = build_alerts_settings_content()
         bot.send_message(chat_id, info, reply_markup=markup)
 
-# Inline Keyboard Callbacks
 @bot.callback_query_handler(func=lambda call: is_admin(call.from_user.id))
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     data = call.data
     user_id = call.from_user.id
     
-    # 1. Switch active profile
     if data.startswith("sel_prof:"):
         prof_id = data.split(":", 1)[1]
         cfg = load_config()
@@ -400,7 +394,6 @@ def handle_callbacks(call):
         except:
             pass
             
-    # 2. Refresh limits
     elif data == "refresh_ai_limits":
         bot.answer_callback_query(call.id, "🔄 Обновляю данные о балансе и лимитах...")
         try:
@@ -409,7 +402,6 @@ def handle_callbacks(call):
         except:
             pass
             
-    # 3. Add new API menu (choose provider type)
     elif data == "add_new_api_menu":
         markup = types.InlineKeyboardMarkup(row_width=2)
         for t_key, t_val in DEFAULT_TEMPLATES.items():
@@ -424,38 +416,51 @@ def handle_callbacks(call):
         
     elif data.startswith("create_type:"):
         p_type = data.split(":", 1)[1]
-        user_states[user_id] = {"action": "wait_api_name", "type": p_type}
         t_info = DEFAULT_TEMPLATES.get(p_type, DEFAULT_TEMPLATES["custom"])
-        bot.edit_message_text(
-            f"➕ <b>Добавление профиля: {t_info['name']}</b>\n\n"
-            "Введите короткое понятное название для этого профиля (например: <i>Рабочий Gemini</i> или <i>Личный DeepSeek</i>).\n\n"
-            "<i>(Или отправьте <b>-</b> чтобы оставить имя по умолчанию)</i>",
-            chat_id,
-            call.message.message_id
-        )
-
-    # 4. Edit active profile
+        
+        if p_type == "custom":
+            user_states[user_id] = {
+                "action": "wait_custom_name",
+                "type": "custom"
+            }
+            msg = (
+                "🌐 <b>Добавление своего API (Custom)</b>\n\n"
+                "<b>Шаг 1/4:</b> Введите понятное название для этого профиля\n"
+                "(например: <code>Groq Llama 3</code> или <code>Мой Сервер</code>):"
+            )
+        else:
+            user_states[user_id] = {
+                "action": "wait_api_name",
+                "type": p_type,
+                "default_model": t_info["model"],
+                "default_base_url": t_info["base_url"]
+            }
+            msg = (
+                f"{t_info['icon']} <b>Добавление API: {t_info['name']}</b>\n\n"
+                "<b>Шаг 1/2:</b> Введите понятное название для этого ключа\n"
+                f"(например: <code>{t_info['name']} #2</code> или <code>Личный</code>):\n\n"
+                "<i>Отправьте <code>-</code>, чтобы назвать автоматически.</i>"
+            )
+        bot.edit_message_text(msg, chat_id, call.message.message_id)
+        
     elif data == "edit_active_prof":
         cfg = load_config()
-        active_id, prof = get_active_profile(cfg)
+        active_id, active_prof = get_active_profile(cfg)
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("🔑 Ввести новый API-ключ", callback_data=f"edit_key:{active_id}"),
-            types.InlineKeyboardButton("🤖 Сменить модель", callback_data=f"edit_model:{active_id}"),
-            types.InlineKeyboardButton("🏷 Переименовать профиль", callback_data=f"edit_name:{active_id}"),
-            types.InlineKeyboardButton("🔙 Назад к настройкам", callback_data="back_to_settings")
-        )
+        markup.add(types.InlineKeyboardButton("🔑 Сменить API-ключ", callback_data=f"edit_key:{active_id}"))
+        markup.add(types.InlineKeyboardButton("🤖 Сменить модель", callback_data=f"edit_model:{active_id}"))
+        markup.add(types.InlineKeyboardButton("🏷 Переименовать профиль", callback_data=f"edit_name:{active_id}"))
+        markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_settings"))
+        
         bot.edit_message_text(
-            f"✏️ <b>РЕДАКТИРОВАНИЕ ПРОФИЛЯ</b>\n\n"
-            f"Профиль: <b>{prof.get('name', active_id)}</b>\n"
-            f"Модель: <code>{prof.get('model', 'по умолчанию')}</code>\n\n"
+            f"✏️ <b>Редактирование профиля: {active_prof.get('name', active_id)}</b>\n\n"
+            f"Текущая модель: <code>{active_prof.get('model', '')}</code>\n\n"
             "Что вы хотите изменить?",
             chat_id,
             call.message.message_id,
             reply_markup=markup
         )
-
-    # 5. Inline sub-actions for editing
+        
     elif data.startswith("edit_key:"):
         prof_id = data.split(":", 1)[1]
         cfg = load_config()
@@ -477,7 +482,7 @@ def handle_callbacks(call):
         bot.edit_message_text(
             f"🤖 <b>Смена модели для {prof.get('name', prof_id)}</b>\n\n"
             f"Текущая модель: <code>{prof.get('model', '')}</code>\n\n"
-            "Отправьте новое название модели следующим сообщением (например: <code>gemini-2.0-flash</code>, <code>gpt-4o</code>, <code>deepseek-chat</code>):",
+            "Отправьте новое название модели следующим сообщением (например: <code>deepseek-v4.1-flash</code>, <code>gpt-4o</code>):",
             chat_id,
             call.message.message_id
         )
@@ -491,7 +496,6 @@ def handle_callbacks(call):
             call.message.message_id
         )
         
-    # 6. Delete profile menu
     elif data == "del_api_menu":
         cfg = load_config()
         profiles = cfg.get("ai_profiles", {})
@@ -517,7 +521,6 @@ def handle_callbacks(call):
         if prof_id in profiles and len(profiles) > 1:
             del_name = profiles[prof_id].get("name", prof_id)
             del profiles[prof_id]
-            # If deleted active profile, reassign
             if cfg.get("active_profile_id") == prof_id:
                 cfg["active_profile_id"] = next(iter(profiles))
             save_config(cfg)
@@ -526,12 +529,10 @@ def handle_callbacks(call):
         info, markup = build_ai_settings_content()
         bot.edit_message_text(info, chat_id, call.message.message_id, reply_markup=markup)
         
-    # 7. Back to settings
     elif data == "back_to_settings":
         info, markup = build_ai_settings_content()
         bot.edit_message_text(info, chat_id, call.message.message_id, reply_markup=markup)
         
-    # Alerts management callbacks
     elif data == "toggle_alerts":
         cfg = load_config()
         curr = cfg.get("auto_alerts_enabled", True)
@@ -566,14 +567,12 @@ def handle_callbacks(call):
             msg_text = "✅ <b>Отлично! Просроченных и критически горящих тем на форуме нет.</b>"
         send_long_message(chat_id, msg_text)
 
-    # 8. Close settings
     elif data == "close_settings":
         try:
             bot.delete_message(chat_id, call.message.message_id)
         except:
             pass
 
-# Catch all text messages
 @bot.message_handler(func=lambda m: is_admin(m.from_user.id))
 def handle_text_interaction(message):
     user_id = message.from_user.id
@@ -582,7 +581,6 @@ def handle_text_interaction(message):
     
     state = user_states.get(user_id)
     
-    # --- FLOW: Add standard API ---
     if state and state.get("action") == "wait_api_name":
         p_type = state["type"]
         t_info = DEFAULT_TEMPLATES.get(p_type, DEFAULT_TEMPLATES["custom"])
@@ -592,63 +590,29 @@ def handle_text_interaction(message):
         
         name = text if text != "-" else f"{t_info['name']} #{len(profiles) + 1}"
         state["name"] = name
+        state["action"] = "wait_new_key"
         
-        if p_type == "custom":
-            state["action"] = "wait_custom_base_url"
-            bot.send_message(
-                chat_id,
-                "🌐 <b>Ввод Base URL для своего API</b>\n\n"
-                "Отправьте базовый URL эндпоинта (например: <code>https://api.openai.com/v1</code> или <code>https://openrouter.ai/api/v1</code>):"
-            )
-            return
-        else:
-            state["action"] = "wait_api_key"
-            bot.send_message(
-                chat_id,
-                f"🔑 <b>Ввод API-ключа для {name}</b>\n\n"
-                "Отправьте ваш API-ключ следующим сообщением в этот чат.\n\n"
-                "<i>🔒 Бот мгновенно удалит сообщение с ключом после получения!</i>"
-            )
-            return
-            
-    if state and state.get("action") == "wait_custom_base_url":
-        state["base_url"] = text
-        state["action"] = "wait_custom_model"
         bot.send_message(
             chat_id,
-            "🤖 <b>Ввод названия модели</b>\n\n"
-            "Отправьте точный идентификатор модели (например: <code>gpt-4o</code>, <code>claude-3-5-sonnet-20241022</code>, <code>deepseek/deepseek-chat</code>):"
+            f"🔑 <b>Шаг 2/2: Отправьте API-ключ для «{name}»</b>:\n\n"
+            "<i>🔒 В целях безопасности бот сразу удалит ваше сообщение с ключом после сохранения!</i>"
         )
         return
         
-    if state and state.get("action") == "wait_custom_model":
-        state["model"] = text
-        state["action"] = "wait_api_key"
-        bot.send_message(
-            chat_id,
-            "🔑 <b>Ввод API-ключа</b>\n\n"
-            "Отправьте ваш API-ключ следующим сообщением в этот чат.\n\n"
-            "<i>🔒 Бот мгновенно удалит сообщение с ключом после получения!</i>"
-        )
-        return
-
-    if state and state.get("action") == "wait_api_key":
+    if state and state.get("action") == "wait_new_key":
+        p_type = state["type"]
+        name = state["name"]
+        model = state.get("default_model", "")
+        base_url = state.get("default_base_url", "")
         api_key = text
+        
+        bot.send_message(chat_id, "⏳ Проверяю валидность ключа...")
+        ok, res_msg = test_ai_key(p_type, api_key, base_url, model)
+        
         try:
             bot.delete_message(chat_id, message.message_id)
         except:
             pass
-            
-        p_type = state["type"]
-        name = state["name"]
-        
-        if p_type != "custom":
-            t_info = DEFAULT_TEMPLATES[p_type]
-            base_url = t_info["base_url"]
-            model = t_info["model"]
-        else:
-            base_url = state.get("base_url", "")
-            model = state.get("model", "default")
             
         cfg = load_config()
         prof_id = f"prof_{uuid.uuid4().hex[:8]}"
@@ -656,6 +620,63 @@ def handle_text_interaction(message):
             "id": prof_id,
             "name": name,
             "type": p_type,
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key
+        }
+        cfg.setdefault("ai_profiles", {})[prof_id] = new_prof
+        cfg["active_profile_id"] = prof_id
+        save_config(cfg)
+        user_states.pop(user_id, None)
+        
+        limit_str = get_ai_limit_info(new_prof, cfg)
+        status_line = "✅ Ключ подтверждён!" if ok else f"⚠️ Ключ сохранён ({res_msg})"
+        
+        bot.send_message(
+            chat_id,
+            f"🎉 <b>Новый API-профиль «{name}» успешно добавлен и активирован!</b>\n\n"
+            f"📌 Статус проверки: {status_line}\n"
+            f"🤖 Модель: <code>{model}</code>\n"
+            f"📊 <b>Остаток лимита / Баланс:</b> <code>{limit_str}</code>",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    if state and state.get("action") == "wait_custom_name":
+        state["name"] = text
+        state["action"] = "wait_custom_url"
+        bot.send_message(chat_id, "🌐 <b>Шаг 2/4:</b> Отправьте Base URL вашего OpenAI-совместимого сервиса\n(например: <code>https://api.groq.com/openai/v1</code>):")
+        return
+        
+    if state and state.get("action") == "wait_custom_url":
+        state["base_url"] = text
+        state["action"] = "wait_custom_model"
+        bot.send_message(chat_id, "🤖 <b>Шаг 3/4:</b> Отправьте название модели\n(например: <code>llama-3.3-70b-versatile</code> или <code>default</code>):")
+        return
+        
+    if state and state.get("action") == "wait_custom_model":
+        state["model"] = text
+        state["action"] = "wait_custom_key"
+        bot.send_message(chat_id, "🔑 <b>Шаг 4/4:</b> Отправьте API-ключ для этого сервиса (или любой текст, если ключ не требуется):")
+        return
+        
+    if state and state.get("action") == "wait_custom_key":
+        api_key = text
+        name = state["name"]
+        model = state["model"]
+        base_url = state["base_url"]
+        
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except:
+            pass
+            
+        cfg = load_config()
+        prof_id = f"prof_{uuid.uuid4().hex[:8]}"
+        new_prof = {
+            "id": prof_id,
+            "name": name,
+            "type": "custom",
             "model": model,
             "base_url": base_url,
             "api_key": api_key
@@ -676,7 +697,6 @@ def handle_text_interaction(message):
         )
         return
 
-    # --- FLOW: Update existing profile ---
     if state and state.get("action") == "update_key":
         prof_id = state["prof_id"]
         cfg = load_config()
@@ -720,7 +740,6 @@ def handle_text_interaction(message):
         user_states.pop(user_id, None)
         return
 
-    # --- Normal message -> Chat with active AI! ---
     cfg = load_config()
     importlib.reload(ai_handler)
     _, active_prof = ai_handler.get_active_profile(cfg)
@@ -847,4 +866,4 @@ if __name__ == "__main__":
     try:
         bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
     except Exception as e:
-        print(f"❌ Ошибка в polling: {e}", flush=True) 
+        print(f"❌ Ошибка в polling: {e}", flush=True)
