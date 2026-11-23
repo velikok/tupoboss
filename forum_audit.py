@@ -28,6 +28,90 @@ if sys.platform == "win32":
 
 import shutil
 
+try:
+    import requests
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    HAS_FAST_ENGINE = True
+except ImportError:
+    HAS_FAST_ENGINE = False
+
+DEFAULT_XF_USER = "208737%2CHfBa3p5I774lhDq9QWBmFhQT2w8HZgMkNO8XoDJK"
+DEFAULT_XF_TFA_TRUST = "o_OiivtH8DhJ12SPSI5kWt5-T-T3gXVg"
+
+def get_forum_credentials():
+    xf_user = os.environ.get("FORUM_XF_USER")
+    xf_tfa = os.environ.get("FORUM_XF_TFA_TRUST")
+    
+    # Check config.backup.json or config.json
+    base_dir = os.path.dirname(__file__)
+    for cfg_name in ["config.backup.json", "config.json"]:
+        p = os.path.join(base_dir, cfg_name)
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if not xf_user and "forum_xf_user" in data:
+                        xf_user = data["forum_xf_user"]
+                    if not xf_tfa and "forum_xf_tfa_trust" in data:
+                        xf_tfa = data["forum_xf_tfa_trust"]
+            except Exception:
+                pass
+                
+    # Fallback default if not specified
+    if not xf_user:
+        xf_user = DEFAULT_XF_USER
+    if not xf_tfa:
+        xf_tfa = DEFAULT_XF_TFA_TRUST
+    return xf_user, xf_tfa
+
+_requests_session = None
+
+def get_fast_session():
+    global _requests_session
+    if _requests_session is not None:
+        return _requests_session
+    if not HAS_FAST_ENGINE:
+        return None
+        
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    })
+    
+    xf_user, xf_tfa = get_forum_credentials()
+    if xf_user:
+        s.cookies.set("xf_user", xf_user, domain="forum.blackrussia.online")
+    if xf_tfa:
+        s.cookies.set("xf_tfa_trust", xf_tfa, domain="forum.blackrussia.online")
+        
+    _requests_session = s
+    return _requests_session
+
+def solve_vddos_and_fetch_requests(url, timeout=20):
+    s = get_fast_session()
+    if s is None:
+        return ""
+    for _ in range(2):
+        try:
+            r = s.get(url, timeout=timeout)
+            text = r.text
+            if 'w3-include-html="/5s.html"' in text or "slowAES" in text:
+                hex_matches = re.findall(r'"([a-f0-9]{32})"', text)
+                if len(hex_matches) >= 3:
+                    key = bytes.fromhex(hex_matches[0])
+                    iv = bytes.fromhex(hex_matches[1])
+                    ct = bytes.fromhex(hex_matches[2])
+                    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+                    r3actlb = (cipher.decryptor().update(ct) + cipher.decryptor().finalize()).hex()
+                    s.cookies.set("R3ACTLB", r3actlb, domain="forum.blackrussia.online")
+                    continue
+            return text
+        except Exception:
+            time.sleep(0.5)
+    return ""
+
 def get_chrome_path():
     env_chrome = os.environ.get("CHROME_BIN") or os.environ.get("CHROME_PATH")
     if env_chrome and os.path.exists(env_chrome):
@@ -113,7 +197,9 @@ SECTIONS_CONFIG = [
     }
 ]
 
-def fetch_html(url, budget=1200, retries=2):
+def fetch_html_chrome(url, budget=1200, retries=2):
+    if not CHROME_PATH or not os.path.exists(CHROME_PATH):
+        return ""
     cmd = [
         CHROME_PATH,
         "--headless=new",
@@ -157,6 +243,16 @@ def fetch_html(url, budget=1200, retries=2):
                 return ""
             time.sleep(0.5)
     return ""
+
+def fetch_html(url, budget=1200, retries=2):
+    # 1. Primary Engine: Ultra-fast pure requests with vDDoS bypass and admin session
+    if HAS_FAST_ENGINE:
+        fast_text = solve_vddos_and_fetch_requests(url)
+        if fast_text and any(x in fast_text for x in ["structItem", "bbWrapper", "message-body", "emptyThreadList"]):
+            return fast_text
+            
+    # 2. Fallback Engine: Headless Chrome
+    return fetch_html_chrome(url, budget=budget, retries=retries)
 
 def fetch_thread_summary(thread_url):
     html = fetch_html(thread_url, budget=800)

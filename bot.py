@@ -121,6 +121,19 @@ def load_config():
             if p.get("type") == "gemini":
                 p["api_key"] = env_gemini.strip()
 
+    # Forum credentials
+    env_xf_user = os.environ.get("FORUM_XF_USER")
+    if env_xf_user:
+        cfg["forum_xf_user"] = env_xf_user.strip()
+    elif "forum_xf_user" in cfg:
+        os.environ["FORUM_XF_USER"] = cfg["forum_xf_user"]
+
+    env_xf_tfa = os.environ.get("FORUM_XF_TFA_TRUST")
+    if env_xf_tfa:
+        cfg["forum_xf_tfa_trust"] = env_xf_tfa.strip()
+    elif "forum_xf_tfa_trust" in cfg:
+        os.environ["FORUM_XF_TFA_TRUST"] = cfg["forum_xf_tfa_trust"]
+
     return cfg
 
 def save_config(cfg):
