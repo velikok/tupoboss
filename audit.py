@@ -141,7 +141,6 @@ def is_red(color_str):
         return False
 
 def export_sheet(spreadsheet_id, output_path):
-    # Locate gsheets binary or cmd
     possible_bins = [
         r"C:\Users\velik\.gemini\antigravity\plugin_data\gsheets\bin\gsheets-986250228.exe",
         r"C:\Users\velik\.gemini\antigravity\bin\gsheets.cmd",
@@ -173,7 +172,6 @@ def run_audit(support_xlsx, admin_xlsx, today=None):
     with zipfile.ZipFile(support_xlsx, 'r') as z_sup:
         sup_sheets, ss_sup, fills_sup, fonts_sup, xfs_sup = parse_xlsx_sheets(z_sup)
         
-        # Таблица АП
         ap_sheet_rel = sup_sheets.get("Таблица АП")
         if ap_sheet_rel:
             rows_ap = read_sheet_cells(z_sup, ap_sheet_rel, ss_sup, fills_sup, fonts_sup, xfs_sup)
@@ -202,7 +200,6 @@ def run_audit(support_xlsx, admin_xlsx, today=None):
             report["support"]["reprimand_3_3"] = rep_3_agents
             report["support"]["red_highlighted"] = red_agents
         
-        # Лист месяца (например 'Ноябрь 2026')
         month_names_ru = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", 
                           "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
         cur_month_title = f"{month_names_ru[today.month - 1]} {today.year}"
@@ -270,7 +267,6 @@ def run_audit(support_xlsx, admin_xlsx, today=None):
     with zipfile.ZipFile(admin_xlsx, 'r') as z_adm:
         adm_sheets, ss_adm, fills_adm, fonts_adm, xfs_adm = parse_xlsx_sheets(z_adm)
         
-        # Администрация AQUA
         adm_main_rel = adm_sheets.get("Администрация AQUA")
         if adm_main_rel:
             rows_adm = read_sheet_cells(z_adm, adm_main_rel, ss_adm, fills_adm, fonts_adm, xfs_adm)
@@ -282,7 +278,6 @@ def run_audit(support_xlsx, admin_xlsx, today=None):
                 if not nick:
                     continue
                 
-                # Check 3 of 3
                 rep_3 = False
                 for c_idx, c_info in r_data.items():
                     v = str(c_info.get('val', ''))
@@ -292,7 +287,6 @@ def run_audit(support_xlsx, admin_xlsx, today=None):
                 if rep_3:
                     rep_3_admins.append({"row": r_idx, "nick": nick})
                     
-                # Check red highlight
                 is_row_red = False
                 for c_idx, c_info in r_data.items():
                     fg = c_info.get('fill', {}).get('fg')
@@ -314,11 +308,14 @@ def run_audit(support_xlsx, admin_xlsx, today=None):
         for s_title in adm_sheets.keys():
             m = re.match(r'(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', s_title.strip())
             if m:
-                d_start = datetime.strptime(m.group(1), "%d.%m.%Y")
-                d_end = datetime.strptime(m.group(2), "%d.%m.%Y")
-                if d_start.date() <= today.date() <= d_end.date():
-                    week_sheet_title = s_title
-                    break
+                try:
+                    d_start = datetime.strptime(m.group(1), "%d.%m.%Y")
+                    d_end = datetime.strptime(m.group(2), "%d.%m.%Y")
+                    if d_start.date() <= today.date() <= d_end.date():
+                        week_sheet_title = s_title
+                        break
+                except Exception:
+                    continue
                     
         if not week_sheet_title:
             for s_title in adm_sheets.keys():
