@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import subprocess
 import json
@@ -17,7 +18,7 @@ SECTION_NAMES = {
 }
 
 _cache = {}
-CACHE_TTL = 90 # seconds
+CACHE_TTL = 60 # seconds
 
 def fix_mojibake(s):
     if not s or not isinstance(s, str):
@@ -37,30 +38,41 @@ def fetch_forum_data(section=None, skip_summaries=True):
         if now - cached_at < CACHE_TTL:
             return cached_data
             
-    cmd = ["python", FORUM_AUDIT_SCRIPT]
-    if section:
-        cmd.extend(["--section", section])
-    if skip_summaries:
-        cmd.append("--skip-summaries")
-        
+    # 1. Primary: Direct In-Process Call
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=150)
-        idx = res.stdout.find('{')
-        if idx != -1:
-            data = json.loads(res.stdout[idx:])
-            # Only cache if data actually contains threads
-            has_threads = any(
-                len(s.get("in_progress", [])) > 0 or len(s.get("overdue", [])) > 0
-                for s in data.get("sections", {}).values()
-            )
-            if has_threads:
-                _cache[cache_key] = (data, now)
-            return data
-        err_msg = res.stderr.strip()
-        return {"error": err_msg or "Пустой ответ от браузера (возможно, защита Cloudflare или отсутствует Chrome/Chromium на сервере)."}
-    except Exception as e:
-        print("Forum fetch error:", e)
-        return {"error": str(e)}
+        import forum_audit
+        data = forum_audit.run_full_audit(section_filter=section, fetch_summaries=not skip_summaries)
+        has_threads = any(
+            len(s.get("in_progress", [])) > 0 or len(s.get("overdue", [])) > 0
+            for s in data.get("sections", {}).values()
+        )
+        if has_threads:
+            _cache[cache_key] = (data, now)
+        return data
+    except Exception as e_direct:
+        # 2. Fallback: Subprocess with current python interpreter
+        cmd = [sys.executable, FORUM_AUDIT_SCRIPT]
+        if section:
+            cmd.extend(["--section", section])
+        if skip_summaries:
+            cmd.append("--skip-summaries")
+            
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=120)
+            idx = res.stdout.find('{')
+            if idx != -1:
+                data = json.loads(res.stdout[idx:])
+                has_threads = any(
+                    len(s.get("in_progress", [])) > 0 or len(s.get("overdue", [])) > 0
+                    for s in data.get("sections", {}).values()
+                )
+                if has_threads:
+                    _cache[cache_key] = (data, now)
+                return data
+            err_msg = res.stderr.strip()
+            return {"error": err_msg or f"Ошибка вызова: {e_direct}"}
+        except Exception as e:
+            return {"error": f"Ошибка запуска аудита: {e} (прямой: {e_direct})"}
 
 def extract_urgent_threads(in_prog_list, max_hours=5):
     urgent_list = []
@@ -82,10 +94,19 @@ def get_overdue_and_urgent_report():
     if not data:
         return "❌ Не удалось получить данные с форума. Попробуйте позже."
     if "error" in data:
-        return f"❌ <b>Ошибка загрузки жалоб ГА на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
-    if "error" in data:
         return f"❌ <b>Ошибка проверки форума на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
         
+    total_found = sum(len(s.get("in_progress", [])) + len(s.get("overdue", [])) for s in data.get("sections", {}).values())
+    if total_found == 0:
+        if data.get("is_guest"):
+            return (
+                "⚠️ <b>Внимание: Форум открылся в режиме ГОСТЯ (сессия не авторизована).</b>\n\n"
+                "Темы «На рассмотрении» и «Ожидание» скрыты форумом для обычных гостей.\n"
+                "Проверьте, что в панели хостинга задана переменная <code>FORUM_XF_USER</code> с актуальными куки."
+            )
+        if data.get("last_error"):
+            return f"❌ <b>Ошибка подключения к форуму:</b>\n\n<code>{html.escape(str(data['last_error'])[:400])}</code>"
+            
     has_overdue = False
     section_blocks = []
     
@@ -142,6 +163,12 @@ def get_ga_complaints_report():
     ga_threads = admin_sec.get("ga_threads", [])
     
     if not ga_threads:
+        if data.get("is_guest"):
+            return (
+                "⚠️ <b>Внимание: Форум открылся в режиме ГОСТЯ (сессия не авторизована).</b>\n\n"
+                "Темы жалоб скрыты форумом для неавторизованных пользователей.\n"
+                "Проверьте, что в панели хостинга задана переменная <code>FORUM_XF_USER</code> с актуальными куки."
+            )
         return "👑 <b>Жалобы Главному Администратору:</b>\n\nТемы с префиксом 'Главному администратору' сейчас отсутствуют."
         
     lines = [f"👑 <b>ТЕМЫ «ГЛАВНОМУ АДМИНИСТРАТОРУ» ({len(ga_threads)}):</b>\n"]
@@ -188,8 +215,19 @@ def get_full_forum_report():
     if not data:
         return "❌ Не удалось получить данные с форума. Попробуйте позже."
     if "error" in data:
-        return f"❌ <b>Ошибка загрузки жалоб ГА на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
+        return f"❌ <b>Ошибка проверки форума на сервере:</b>\n\n<code>{html.escape(data['error'][:400])}</code>"
         
+    total_found = sum(len(s.get("in_progress", [])) + len(s.get("overdue", [])) for s in data.get("sections", {}).values())
+    if total_found == 0:
+        if data.get("is_guest"):
+            return (
+                "⚠️ <b>Внимание: Форум открылся в режиме ГОСТЯ (сессия не авторизована).</b>\n\n"
+                "Темы «На рассмотрении» и «Ожидание» скрыты форумом для неавторизованных пользователей.\n"
+                "Проверьте, что в панели хостинга задана переменная <code>FORUM_XF_USER</code> с актуальными куки."
+            )
+        if data.get("last_error"):
+            return f"❌ <b>Ошибка подключения к форуму:</b>\n\n<code>{html.escape(str(data['last_error'])[:400])}</code>"
+            
     total_overdue = sum(len(s.get("overdue", [])) for s in data.get("sections", {}).values())
     total_urgent = sum(len(extract_urgent_threads(s.get("in_progress", []))) for s in data.get("sections", {}).values())
     
