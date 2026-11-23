@@ -332,6 +332,39 @@ def generate_verdict(thread_info):
         verdict["rule_title"] = rule_obj.get("title", "")
     return verdict
 
+def get_next_pending_thread(exclude_thread_ids=None):
+    if exclude_thread_ids is None:
+        exclude_thread_ids = set()
+    url = f"{BASE_URL}/forums/Обжалование-наказаний.{FORUM_APPEALS_NODE}/"
+    html_text = solve_vddos_and_fetch_requests(url)
+    if not html_text:
+        return None
+        
+    parts = html_text.split('<div class="structItem structItem--thread')
+    for p in parts[1:]:
+        if "is-redirect" in p or "is-deleted" in p or "structItem-status--locked" in p:
+            continue
+        m = re.search(r'<a href="(/threads/[^"]+)"[^>]*>(.*?)</a>', p)
+        if not m:
+            continue
+        rel_url = m.group(1).split("/unread")[0]
+        th_id_m = re.search(r'threads/[^/]+\.(\d+)', rel_url)
+        th_id = th_id_m.group(1) if th_id_m else None
+        if not th_id or str(th_id) in exclude_thread_ids:
+            continue
+            
+        pref_m = re.search(r'<span class="label[^"]*"[^>]*>(.*?)</span>', p)
+        prefix = re.sub(r'<[^>]+>', '', pref_m.group(1)).strip() if pref_m else ""
+        if prefix in ["Закрыто", "Отказано", "Одобрено"]:
+            continue
+            
+        full_url = BASE_URL + rel_url if rel_url.startswith("/") else rel_url
+        info = extract_first_post_info(full_url)
+        if info:
+            return info
+            
+    return None
+
 def get_next_pending_appeal(exclude_thread_ids=None):
     if exclude_thread_ids is None:
         exclude_thread_ids = set()

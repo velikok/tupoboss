@@ -196,14 +196,10 @@ def is_admin(user_id):
 
 def can_use_copilot(user_id):
     if not user_id:
+        return True
+    if user_id == 5594041416:
         return False
-    if not is_admin(user_id):
-        return False
-    if not forum_copilot or not forum_actions:
-        return False
-    cfg = load_config()
-    allowed = cfg.get("copilot_allowed_ids", [1399524277])
-    return user_id in allowed
+    return is_admin(user_id)
 
 def get_main_keyboard(user_id=None):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -215,7 +211,7 @@ def get_main_keyboard(user_id=None):
     b_alerts = types.KeyboardButton("🔔 Авто-алерты")
     markup.add(b_sheets, b_overdue)
     markup.add(b_ga, b_full_forum)
-    if user_id and can_use_copilot(user_id):
+    if user_id != 5594041416:
         b_copilot = types.KeyboardButton("⚖️ Разбор обжалований")
         markup.add(b_copilot)
     markup.add(b_ai, b_alerts)
@@ -229,36 +225,23 @@ def build_copilot_card(item):
     title = html.escape(info.get("title", ""))
     author = html.escape(info.get("author", ""))
     url = info.get("url", "")
-    category = verdict.get("category", "Разбор")
-    explanation = html.escape(verdict.get("explanation", ""))
-    reply_text = html.escape(verdict.get("reply_text", ""))
     prefix = verdict.get("prefix", "Без префикса")
     dest = verdict.get("destination_node")
+    reply_text = html.escape(verdict.get("reply_text", ""))
+    ai_analysis = verdict.get("ai_analysis") or verdict.get("explanation", "")
     
     action_desc = f"Префикс: <b>[{prefix}]</b>"
     if dest:
         action_desc += f" ➔ Перенос в раздел <code>{dest}</code>"
     if verdict.get("stick"):
         action_desc += " + Закрепить 📌"
-        
-    rule_num = verdict.get("rule_num")
-    rule_punish = verdict.get("rule_punishment")
-    rule_title = verdict.get("rule_title", "")
-    rule_block = ""
-    if rule_num:
-        rule_block = f"📜 <b>Пункт правил:</b> <code>{rule_num}</code> ({html.escape(rule_title[:60])})\n"
-        if rule_punish:
-            rule_block += f"⚖️ <b>Регламент:</b> <code>{html.escape(rule_punish)}</code>\n"
-        rule_block += "\n"
 
     text = (
-        f"⚖️ <b>РАЗБОР ОБЖАЛОВАНИЯ #{info.get('thread_id')}</b>\n\n"
+        f"🤖 <b>РАЗБОР ОБЖАЛОВАНИЯ #{info.get('thread_id')} (DEEPSEEK)</b>\n\n"
         f"📌 <b>Тема:</b> <a href='{url}'><b>{title}</b></a>\n"
-        f"👤 <b>Автор:</b> <code>{author}</code>\n"
-        f"🏷 <b>Категория:</b> {category}\n"
-        f"{rule_block}"
-        f"💡 <b>Анализ:</b> <i>{explanation}</i>\n\n"
-        f"📝 <b>Предлагаемый ответ на форум:</b>\n"
+        f"👤 <b>Автор:</b> <code>{author}</code>\n\n"
+        f"💡 <b>Вердикт нейросети:</b>\n<i>{html.escape(ai_analysis[:700])}</i>\n\n"
+        f"📝 <b>Ответ для форума:</b>\n"
         f"<blockquote>{reply_text}</blockquote>\n\n"
         f"🎯 <b>Действие:</b> {action_desc}"
     )
@@ -283,13 +266,16 @@ def start_copilot_review(chat_id, user_id):
     
     msg = bot.send_message(chat_id, "🔍 Сканирую «Обжалование наказаний» в поисках открытых тем...")
     importlib.reload(forum_copilot)
-    item = forum_copilot.get_next_pending_appeal(exclude_thread_ids=seen)
-    try:
-        bot.delete_message(chat_id, msg.message_id)
-    except Exception:
-        pass
+    info = forum_copilot.get_next_pending_thread(exclude_thread_ids=seen)
+    if not info:
+        item_old = forum_copilot.get_next_pending_appeal(exclude_thread_ids=seen)
+        info = item_old.get("info") if item_old else None
         
-    if not item:
+    if not info:
+        try:
+            bot.delete_message(chat_id, msg.message_id)
+        except Exception:
+            pass
         bot.send_message(
             chat_id,
             "✅ <b>Отлично! В разделе «Обжалование наказаний» нет открытых тем, требующих ответа.</b>",
@@ -297,9 +283,48 @@ def start_copilot_review(chat_id, user_id):
         )
         return
         
-    u_state["active_copilot"] = item
-    seen.add(str(item["info"].get("thread_id")))
+    th_id = info.get("thread_id")
+    seen.add(str(th_id))
     
+    try:
+        bot.edit_message_text(
+            f"🤖 <b>DeepSeek анализирует тему #{th_id}...</b>\n\n<i>Применяю базу правил и регламенты Toshiro Forester...</i>",
+            chat_id,
+            msg.message_id
+        )
+    except Exception:
+        pass
+        
+    # Call DeepSeek with Toshiro knowledge prompt!
+    cfg = load_config()
+    importlib.reload(ai_handler)
+    
+    ai_prompt = (
+        f"Проанализируй тему обжалования #{th_id}:\n"
+        f"Заголовок: {info['title']}\n"
+        f"Автор: {info['author']}\n"
+        f"Ссылка: {info['url']}\n"
+        f"Текст первого сообщения:\n{info['body'][:2500]}\n\n"
+        "Сделай разбор по официальным правилам Black Russia и регламенту Toshiro Forester. Дай точный вердикт (действие, префикс, пункт правил) и готовый текст ответа для форума."
+    )
+    
+    ai_reply = ai_handler.send_ai_query(
+        prompt=ai_prompt,
+        config=cfg,
+        system_prompt=ai_handler.get_toshiro_admin_system_prompt()
+    )
+    
+    verdict = ai_handler.parse_ai_verdict(ai_reply, th_id)
+    verdict["ai_analysis"] = ai_reply
+    
+    item = {"info": info, "verdict": verdict}
+    u_state["active_copilot"] = item
+    
+    try:
+        bot.delete_message(chat_id, msg.message_id)
+    except Exception:
+        pass
+        
     card_text, markup = build_copilot_card(item)
     bot.send_message(chat_id, card_text, reply_markup=markup, disable_web_page_preview=True)
 
@@ -741,13 +766,12 @@ def handle_callbacks(call):
 
 
     # --- COPILOT CALLBACKS ---
-    elif data in ["cp_exec", "cp_skip", "cp_edit_text", "cp_change_action", "cp_close"] or data.startswith("cp_act:"):
+    elif data == "cp_exec":
         if not can_use_copilot(user_id):
             bot.answer_callback_query(call.id, "⛔️ Доступ ограничен.", show_alert=True)
             return
 
-        if data == "cp_exec":
-            u_state = user_states.get(user_id, {})
+        u_state = user_states.get(user_id, {})
         item = u_state.get("active_copilot")
         if not item:
             bot.answer_callback_query(call.id, "⚠️ Данные темы устарели")
@@ -768,7 +792,14 @@ def handle_callbacks(call):
         start_copilot_review(chat_id, user_id)
         
     elif data == "cp_skip":
+        if not can_use_copilot(user_id):
+            return
         bot.answer_callback_query(call.id, "⏭ Пропускаю тему...")
+        u_state = user_states.setdefault(user_id, {})
+        item = u_state.get("active_copilot")
+        if item and item.get("info", {}).get("thread_id"):
+            seen = u_state.setdefault("copilot_seen", set())
+            seen.add(str(item["info"]["thread_id"]))
         try:
             bot.delete_message(chat_id, call.message.message_id)
         except Exception:
@@ -776,6 +807,9 @@ def handle_callbacks(call):
         start_copilot_review(chat_id, user_id)
         
     elif data == "cp_edit_text":
+        if not can_use_copilot(user_id):
+            return
+        bot.answer_callback_query(call.id, "✏️ Введите новый текст")
         u_state = user_states.setdefault(user_id, {})
         u_state["action"] = "wait_copilot_custom_text"
         bot.send_message(
@@ -785,6 +819,9 @@ def handle_callbacks(call):
         )
         
     elif data == "cp_change_action":
+        if not can_use_copilot(user_id):
+            return
+        bot.answer_callback_query(call.id, "🔄 Смена действия")
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton("🟢 Одобрить (сокращение наказания)", callback_data="cp_act:reduce"),
