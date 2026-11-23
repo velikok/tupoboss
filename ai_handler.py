@@ -74,10 +74,12 @@ def send_ai_query(prompt, config, system_prompt=None):
         except Exception as e:
             return f"❌ Ошибка подключения к Claude: {str(e)}"
             
-    # 2. OpenAI-compatible API (Gemini, OpenAI, DeepSeek, OpenRouter, Custom)
+    # 2. OpenAI-compatible API (Gemini, OpenAI, DeepSeek, OpenRouter, TokenWave, Custom)
     clean_base = base_url.rstrip("/")
     if "zveno.ai" in clean_base and "api.zveno.ai" not in clean_base:
         clean_base = clean_base.replace("zveno.ai", "api.zveno.ai")
+    if "api.tokenwave.ru" in clean_base:
+        clean_base = clean_base.replace("api.tokenwave.ru", "tokenwave.ru")
     if clean_base.endswith("/v1") or clean_base.endswith("/v1beta/openai") or "/v1" in clean_base:
         url = f"{clean_base}/chat/completions"
     else:
@@ -94,6 +96,9 @@ def send_ai_query(prompt, config, system_prompt=None):
     messages.append({"role": "user", "content": prompt})
     
     MODEL_ALIASES = {
+        "deepseek": "deepseek-v4.1-flash",
+        "deepseek-chat": "deepseek-v4.1-flash",
+        "deepseek-flash": "deepseek-v4.1-flash",
         "nvidia: nemotron 3 ultra": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nemotron 3 ultra": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia nemotron 3 ultra": "nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -107,7 +112,7 @@ def send_ai_query(prompt, config, system_prompt=None):
     }
     
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        resp = requests.post(url, headers=headers, json=payload, timeout=90)
         resp_text = resp.text.strip()
         is_html = resp_text.startswith("<") or "<!doctype" in resp_text.lower() or "<html" in resp_text.lower()
         
@@ -115,7 +120,7 @@ def send_ai_query(prompt, config, system_prompt=None):
         if resp.status_code == 404 and "model_not_found" in resp_text:
             alt_m = target_model.replace(":free", "") if ":free" in target_model else f"{target_model}:free"
             alt_payload = dict(payload, model=alt_m)
-            alt_m_resp = requests.post(url, headers=headers, json=alt_payload, timeout=60)
+            alt_m_resp = requests.post(url, headers=headers, json=alt_payload, timeout=90)
             if alt_m_resp.status_code == 200:
                 resp = alt_m_resp
                 resp_text = resp.text.strip()
@@ -124,7 +129,7 @@ def send_ai_query(prompt, config, system_prompt=None):
         # If returned HTML or not 200, try fallback between /v1/chat/completions and /chat/completions
         if (resp.status_code != 200 or is_html) and "/v1/" in url:
             alt_url = url.replace("/v1/chat/completions", "/chat/completions")
-            alt_resp = requests.post(alt_url, headers=headers, json=payload, timeout=60)
+            alt_resp = requests.post(alt_url, headers=headers, json=payload, timeout=90)
             alt_text = alt_resp.text.strip()
             alt_is_html = alt_text.startswith("<") or "<!doctype" in alt_text.lower() or "<html" in alt_text.lower()
             if alt_resp.status_code == 200 and not alt_is_html:
@@ -133,7 +138,7 @@ def send_ai_query(prompt, config, system_prompt=None):
                 is_html = False
         elif (resp.status_code != 200 or is_html) and "/v1/" not in url:
             alt_url = url.replace("/chat/completions", "/v1/chat/completions")
-            alt_resp = requests.post(alt_url, headers=headers, json=payload, timeout=60)
+            alt_resp = requests.post(alt_url, headers=headers, json=payload, timeout=90)
             alt_text = alt_resp.text.strip()
             alt_is_html = alt_text.startswith("<") or "<!doctype" in alt_text.lower() or "<html" in alt_text.lower()
             if alt_resp.status_code == 200 and not alt_is_html:
@@ -190,6 +195,8 @@ def test_ai_key(provider_key, api_key, base_url, model):
     clean_base = base_url.rstrip("/")
     if "zveno.ai" in clean_base and "api.zveno.ai" not in clean_base:
         clean_base = clean_base.replace("zveno.ai", "api.zveno.ai")
+    if "api.tokenwave.ru" in clean_base:
+        clean_base = clean_base.replace("api.tokenwave.ru", "tokenwave.ru")
     if clean_base.endswith("/v1") or clean_base.endswith("/v1beta/openai") or "/v1" in clean_base:
         url = f"{clean_base}/chat/completions"
     else:
@@ -200,6 +207,9 @@ def test_ai_key(provider_key, api_key, base_url, model):
         "Content-Type": "application/json"
     }
     MODEL_ALIASES = {
+        "deepseek": "deepseek-v4.1-flash",
+        "deepseek-chat": "deepseek-v4.1-flash",
+        "deepseek-flash": "deepseek-v4.1-flash",
         "nvidia: nemotron 3 ultra": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nemotron 3 ultra": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia nemotron 3 ultra": "nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -259,8 +269,26 @@ def get_ai_limit_info(arg1, arg2=None, arg3=None):
     base_url = provider_info.get("base_url", "").rstrip("/")
     model = provider_info.get("model", "")
     
-    # 1. DeepSeek
+    # 1. DeepSeek / TokenWave
     if provider_key == "deepseek":
+        if "tokenwave" in base_url or api_key.startswith("sk-zQBM") or api_key.startswith("sk-tw"):
+            try:
+                r = requests.get(
+                    "https://api.tokenwave.ru/v1/balance",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=5
+                )
+                if r.status_code == 200:
+                    d = r.json()
+                    tokens = d.get("balance_tokens", 0)
+                    if tokens:
+                        return f"⚡️ {tokens / 1_000_000:.2f}M токенов ({tokens:,} ток.)"
+                    return "⚡️ 0 токенов"
+                elif r.status_code == 401:
+                    return "❌ Неверный ключ"
+                return f"⚠️ Статус {r.status_code}"
+            except Exception:
+                return "⚠️ Ошибка сети"
         try:
             r = requests.get(
                 "https://api.deepseek.com/user/balance",
@@ -398,7 +426,6 @@ def get_ai_limit_info(arg1, arg2=None, arg3=None):
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
-                # Gemini free tier default limit is 15 RPM / 1500 RPD
                 today_reqs = (config or {}).get("requests_today", {}).get("gemini", 0)
                 left_rpd = max(0, 1500 - today_reqs)
                 return f"⚡️ 15 RPM | {left_rpd}/1500 RPD сегодня"
