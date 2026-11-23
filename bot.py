@@ -186,6 +186,48 @@ def save_config(cfg):
 config = load_config()
 bot = telebot.TeleBot(config["bot_token"], parse_mode="HTML")
 
+# Safe wrappers for TeleBot to prevent any crash from entity parsing (HTML)
+_orig_send_message = bot.send_message
+_orig_edit_message_text = bot.edit_message_text
+_orig_reply_to = bot.reply_to
+
+def _safe_send_message(chat_id, text, **kwargs):
+    try:
+        return _orig_send_message(chat_id, text, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if any(x in err_str for x in ["can't parse entities", "unsupported start tag", "bad request: can't parse", "entity"]):
+            kw = dict(kwargs)
+            kw["parse_mode"] = None
+            return _orig_send_message(chat_id, text, **kw)
+        raise e
+
+def _safe_edit_message_text(text, chat_id=None, message_id=None, **kwargs):
+    try:
+        return _orig_edit_message_text(text, chat_id=chat_id, message_id=message_id, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if any(x in err_str for x in ["can't parse entities", "unsupported start tag", "bad request: can't parse", "entity"]):
+            kw = dict(kwargs)
+            kw["parse_mode"] = None
+            return _orig_edit_message_text(text, chat_id=chat_id, message_id=message_id, **kw)
+        raise e
+
+def _safe_reply_to(message, text, **kwargs):
+    try:
+        return _orig_reply_to(message, text, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if any(x in err_str for x in ["can't parse entities", "unsupported start tag", "bad request: can't parse", "entity"]):
+            kw = dict(kwargs)
+            kw["parse_mode"] = None
+            return _orig_reply_to(message, text, **kw)
+        raise e
+
+bot.send_message = _safe_send_message
+bot.edit_message_text = _safe_edit_message_text
+bot.reply_to = _safe_reply_to
+
 # In-memory user states
 user_states = {}
 
@@ -219,30 +261,36 @@ def get_main_keyboard(user_id=None):
 
 
 def build_copilot_card(item):
-    info = item["info"]
-    verdict = item["verdict"]
+    info = item.get("info", {})
+    verdict = item.get("verdict", {})
     
-    title = html.escape(info.get("title", ""))
-    author = html.escape(info.get("author", ""))
+    title = html.escape(str(info.get("title", "")))
+    author = html.escape(str(info.get("author", "")))
     url = info.get("url", "")
-    prefix = verdict.get("prefix", "Без префикса")
+    prefix = html.escape(str(verdict.get("prefix") or "Без префикса"))
     dest = verdict.get("destination_node")
-    reply_text = html.escape(verdict.get("reply_text", ""))
-    ai_analysis = verdict.get("ai_analysis") or verdict.get("explanation", "")
+    reply_text = html.escape(str(verdict.get("reply_text") or ""))
+    
+    raw_analysis = str(verdict.get("ai_analysis") or verdict.get("explanation") or "")
+    if len(raw_analysis) > 750:
+        raw_analysis = raw_analysis[:750] + "..."
+    ai_analysis = html.escape(raw_analysis)
     
     action_desc = f"Префикс: <b>[{prefix}]</b>"
     if dest:
-        action_desc += f" ➔ Перенос в раздел <code>{dest}</code>"
+        action_desc += f" ➔ Перенос в раздел <code>{html.escape(str(dest))}</code>"
     if verdict.get("stick"):
         action_desc += " + Закрепить 📌"
+
+    reply_block = f"<blockquote>{reply_text}</blockquote>" if reply_text else "<i>(без текста ответа)</i>"
 
     text = (
         f"🤖 <b>РАЗБОР ОБЖАЛОВАНИЯ #{info.get('thread_id')} (DEEPSEEK)</b>\n\n"
         f"📌 <b>Тема:</b> <a href='{url}'><b>{title}</b></a>\n"
         f"👤 <b>Автор:</b> <code>{author}</code>\n\n"
-        f"💡 <b>Вердикт нейросети:</b>\n<i>{html.escape(ai_analysis[:700])}</i>\n\n"
+        f"💡 <b>Вердикт нейросети:</b>\n<i>{ai_analysis}</i>\n\n"
         f"📝 <b>Ответ для форума:</b>\n"
-        f"<blockquote>{reply_text}</blockquote>\n\n"
+        f"{reply_block}\n\n"
         f"🎯 <b>Действие:</b> {action_desc}"
     )
     
@@ -443,7 +491,7 @@ def handle_start(message):
         "Бот готов к выполнению аудита и работе с ИИ:\n"
         "• <b>Таблицы:</b> 3/3 выговоров, красные ячейки, нормы АП и Администрации.\n"
         "• <b>Форум:</b> просрочки, жалобы ГА с выжимкой сути, подфорумы на доработке.\n"
-        "• <b>Авто-алерты:</b> фоновое оповещение при горящих дедлайнах (< 4 ч.) и просрочках.\n"
+        "• <b>Авто-алерты:</b> фоновое оповещение при горящих дедлайнах (менее 4 ч.) и просрочках.\n"
         f"• <b>Активный ИИ:</b> <code>{active_prof.get('name', 'ИИ')}</code> (можно загружать любое количество API).\n\n"
         "Выберите действие на клавиатуре ниже:"
     )
@@ -566,6 +614,7 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     data = call.data
     user_id = call.from_user.id
+    u_state = user_states.setdefault(user_id, {})
     
     # 1. Switch active profile
     if data.startswith("sel_prof:"):
