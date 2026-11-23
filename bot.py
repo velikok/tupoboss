@@ -1040,11 +1040,70 @@ def handle_text_interaction(message):
     _, active_prof = ai_handler.get_active_profile(cfg)
     
     bot.send_chat_action(chat_id, "typing")
+    
+    # Check if user is Toshiro Forester
+    if user_id == 1399524277:
+        sys_prompt = ai_handler.get_toshiro_admin_system_prompt()
+    else:
+        sys_prompt = "Ты умный ассистент руководства проекта Black Russia. Помогаешь отвечать на общие вопросы."
+        
+    ai_prompt = text
+    # Auto-fetch forum thread if link is provided
+    forum_match = re.search(r'https://forum\.blackrussia\.online/threads/[^\s]+', text)
+    if forum_match:
+        th_url = forum_match.group(0)
+        try:
+            from forum_audit import solve_vddos_and_fetch_requests
+            th_html = solve_vddos_and_fetch_requests(th_url)
+            t_m = re.search(r'<h1 class="p-title-value">(.*?)</h1>', th_html, re.DOTALL)
+            th_title = re.sub(r'<[^>]+>', '', t_m.group(1)).strip() if t_m else ""
+            a_m = re.search(r'data-author="([^"]+)"', th_html)
+            th_author = a_m.group(1) if a_m else ""
+            p_m = re.search(r'<article class="message-body[^"]*">(.*?)</article>', th_html, re.DOTALL)
+            th_body = re.sub(r'<[^>]+>', ' ', p_m.group(1)).replace('&nbsp;', ' ').strip() if p_m else ""
+            th_body = re.sub(r'\s+', ' ', th_body)[:2500]
+            
+            ai_prompt = (
+                f"Тоширо прислал тему с форума: {th_url}\n"
+                f"Заголовок: {th_title}\n"
+                f"Автор темы: {th_author}\n"
+                f"Текст жалобы/обжалования:\n{th_body}\n\n"
+                f"Комментарий/вопрос Тоширо: {text}\n\n"
+                "Проанализируй данное обжалование по твоим регламентам и правилам, выдай точный вердикт (действие, префикс) и готовый текст ответа для форума."
+            )
+        except Exception:
+            ai_prompt = text
+
     ai_reply = ai_handler.send_ai_query(
-        prompt=text,
+        prompt=ai_prompt,
         config=cfg,
-        system_prompt="Ты умный ассистент руководства проекта Black Russia. Помогаешь проверять жалобы, регламенты, анализировать ситуации и отвечать на вопросы."
+        system_prompt=sys_prompt
     )
+
+    if forum_match and user_id == 1399524277:
+        th_id_m = re.search(r'threads/[^/]+\.(\d+)', th_url)
+        th_id = th_id_m.group(1) if th_id_m else None
+        if th_id:
+            parsed_v = ai_handler.parse_ai_verdict(ai_reply, th_id)
+            user_states.setdefault(user_id, {})["active_copilot"] = {
+                "info": {
+                    "thread_id": th_id,
+                    "title": th_title,
+                    "author": th_author,
+                    "url": th_url
+                },
+                "verdict": parsed_v
+            }
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(types.InlineKeyboardButton("🚀 Отправить вердикт на форум", callback_data="cp_exec"))
+            markup.add(
+                types.InlineKeyboardButton("✏️ Изменить текст", callback_data="cp_edit_text"),
+                types.InlineKeyboardButton("🔄 Сменить вердикт", callback_data="cp_change_action")
+            )
+            markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="cp_skip"))
+            bot.reply_to(message, ai_reply, reply_markup=markup)
+            return
+
     bot.reply_to(message, ai_reply)
 
 # --- Background Monitor & Alert System ---
