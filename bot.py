@@ -23,9 +23,20 @@ import sheets_runner
 from sheets_runner import run_sheets_audit
 import forum_runner
 from forum_runner import get_overdue_and_urgent_report, get_ga_complaints_report, get_full_forum_report
-import forum_copilot
-import forum_actions
-import rules_kb
+try:
+    import forum_copilot
+except Exception:
+    forum_copilot = None
+
+try:
+    import forum_actions
+except Exception:
+    forum_actions = None
+
+try:
+    import rules_kb
+except Exception:
+    rules_kb = None
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
@@ -187,6 +198,8 @@ def can_use_copilot(user_id):
     if not user_id:
         return False
     if not is_admin(user_id):
+        return False
+    if not forum_copilot or not forum_actions:
         return False
     cfg = load_config()
     allowed = cfg.get("copilot_allowed_ids", [1399524277])
@@ -427,6 +440,9 @@ def handle_alerts_cmd(message):
 @bot.message_handler(commands=['rules', 'rule', 'правила'])
 def handle_rules_cmd(message):
     if not is_admin(message.from_user.id):
+        return
+    if not rules_kb:
+        bot.reply_to(message, "⚠️ База правил серверов ещё не загружена на сервер (нужен rules_kb.py и server_rules.json).")
         return
     text = message.text.strip()
     parts = text.split(maxsplit=1)
