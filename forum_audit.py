@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Black Russia Forum Audit Script
@@ -41,8 +42,6 @@ DEFAULT_XF_TFA_TRUST = "o_OiivtH8DhJ12SPSI5kWt5-T-T3gXVg"
 def get_forum_credentials():
     xf_user = os.environ.get("FORUM_XF_USER")
     xf_tfa = os.environ.get("FORUM_XF_TFA_TRUST")
-    
-    # Check config.backup.json or config.json
     base_dir = os.path.dirname(__file__)
     for cfg_name in ["config.backup.json", "config.json"]:
         p = os.path.join(base_dir, cfg_name)
@@ -56,8 +55,6 @@ def get_forum_credentials():
                         xf_tfa = data["forum_xf_tfa_trust"]
             except Exception:
                 pass
-                
-    # Fallback default if not specified
     if not xf_user:
         xf_user = DEFAULT_XF_USER
     if not xf_tfa:
@@ -72,20 +69,17 @@ def get_fast_session():
         return _requests_session
     if not HAS_FAST_ENGINE:
         return None
-        
     s = requests.Session()
     s.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     })
-    
     xf_user, xf_tfa = get_forum_credentials()
     if xf_user:
         s.cookies.set("xf_user", xf_user, domain="forum.blackrussia.online")
     if xf_tfa:
         s.cookies.set("xf_tfa_trust", xf_tfa, domain="forum.blackrussia.online")
-        
     _requests_session = s
     return _requests_session
 
@@ -136,8 +130,8 @@ SECTIONS_CONFIG = [
         "id": "appeals",
         "title": "Обжалование наказаний",
         "urls": ["https://forum.blackrussia.online/forums/Обжалование-наказаний.845/"],
-        "deadline_hours": 72, # 3 days
-        "target_prefix_ids": ["2", "14"], # На рассмотрении, Ожидание
+        "deadline_hours": 72,
+        "target_prefix_ids": ["2", "14"],
         "target_prefix_names": ["на рассмотрении", "ожидание", "в ожидании"],
         "check_ga": False
     },
@@ -145,8 +139,8 @@ SECTIONS_CONFIG = [
         "id": "admin_complaints",
         "title": "Жалобы на администрацию",
         "urls": ["https://forum.blackrussia.online/forums/Жалобы-на-администрацию.842/"],
-        "deadline_hours": 48, # 2 days
-        "target_prefix_ids": ["2", "14"], # На рассмотрении, Ожидание
+        "deadline_hours": 48,
+        "target_prefix_ids": ["2", "14"],
         "target_prefix_names": ["на рассмотрении", "ожидание", "в ожидании"],
         "check_ga": True
     },
@@ -154,8 +148,8 @@ SECTIONS_CONFIG = [
         "id": "player_complaints",
         "title": "Жалобы на игроков",
         "urls": ["https://forum.blackrussia.online/forums/Жалобы-на-игроков.844/"],
-        "deadline_hours": 48, # 2 days
-        "target_prefix_ids": ["2", "14"], # На рассмотрении, Ожидание
+        "deadline_hours": 48,
+        "target_prefix_ids": ["2", "14"],
         "target_prefix_names": ["на рассмотрении", "ожидание", "в ожидании"],
         "check_ga": False
     },
@@ -166,8 +160,8 @@ SECTIONS_CONFIG = [
             "https://forum.blackrussia.online/forums/РП-ситуации.823/",
             "https://forum.blackrussia.online/forums/Ситуации-на-доработке.847/"
         ],
-        "deadline_hours": 24, # 1 day
-        "target_prefix_ids": ["14"], # Ожидание
+        "deadline_hours": 24,
+        "target_prefix_ids": ["14"],
         "target_prefix_names": ["ожидание", "в ожидании"],
         "check_ga": False
     },
@@ -178,8 +172,8 @@ SECTIONS_CONFIG = [
             "https://forum.blackrussia.online/forums/РП-биографии.824/",
             "https://forum.blackrussia.online/forums/Биографии-на-доработке.850/"
         ],
-        "deadline_hours": 24, # 1 day
-        "target_prefix_ids": ["14"], # Ожидание
+        "deadline_hours": 24,
+        "target_prefix_ids": ["14"],
         "target_prefix_names": ["ожидание", "в ожидании"],
         "check_ga": False
     },
@@ -190,8 +184,8 @@ SECTIONS_CONFIG = [
             "https://forum.blackrussia.online/forums/Неофициальные-rp-организации.821/",
             "https://forum.blackrussia.online/forums/Организации-на-доработке.840/"
         ],
-        "deadline_hours": 24, # 1 day
-        "target_prefix_ids": ["14"], # Ожидание
+        "deadline_hours": 24,
+        "target_prefix_ids": ["14"],
         "target_prefix_names": ["ожидание", "в ожидании"],
         "check_ga": False
     }
@@ -201,27 +195,13 @@ def fetch_html_chrome(url, budget=1200, retries=2):
     if not CHROME_PATH or not os.path.exists(CHROME_PATH):
         return ""
     cmd = [
-        CHROME_PATH,
-        "--headless=new",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        f"--user-data-dir={USER_DATA}",
-        "--disable-gpu",
-        "--disable-software-rasterizer",
-        "--disable-dev-shm-usage",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-background-networking",
-        "--disable-sync",
-        "--disable-translate",
-        "--metrics-recording-only",
-        "--mute-audio",
-        "--blink-settings=imagesEnabled=false",
-        "--disable-remote-fonts",
-        "--disable-extensions",
-        f"--virtual-time-budget={budget}",
-        "--dump-dom",
-        url
+        CHROME_PATH, "--headless=new", "--no-sandbox", "--disable-setuid-sandbox",
+        f"--user-data-dir={USER_DATA}", "--disable-gpu", "--disable-software-rasterizer",
+        "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
+        "--disable-background-networking", "--disable-sync", "--disable-translate",
+        "--metrics-recording-only", "--mute-audio", "--blink-settings=imagesEnabled=false",
+        "--disable-remote-fonts", "--disable-extensions", f"--virtual-time-budget={budget}",
+        "--dump-dom", url
     ]
     for attempt in range(retries):
         try:
@@ -231,7 +211,6 @@ def fetch_html_chrome(url, budget=1200, retries=2):
                 text = raw.decode("utf-8")
             except Exception:
                 text = raw.decode("windows-1251", errors="ignore")
-                
             if "Р–" in text or "Р°" in text or "Рѕ" in text or "РЅ" in text:
                 try:
                     text = text.encode("windows-1251").decode("utf-8")
@@ -245,13 +224,10 @@ def fetch_html_chrome(url, budget=1200, retries=2):
     return ""
 
 def fetch_html(url, budget=1200, retries=2):
-    # 1. Primary Engine: Ultra-fast pure requests with vDDoS bypass and admin session
     if HAS_FAST_ENGINE:
         fast_text = solve_vddos_and_fetch_requests(url)
         if fast_text and any(x in fast_text for x in ["structItem", "bbWrapper", "message-body", "emptyThreadList"]):
             return fast_text
-            
-    # 2. Fallback Engine: Headless Chrome
     return fetch_html_chrome(url, budget=budget, retries=retries)
 
 def fetch_thread_summary(thread_url):
@@ -274,18 +250,12 @@ def fetch_thread_summary(thread_url):
     return "Содержимое первого сообщения не найдено."
 
 def parse_threads_from_html(html, section_cfg, now_ts, fetch_summaries=True):
-    results = {
-        "overdue": [],
-        "in_progress": [],
-        "ga_threads": []
-    }
-    
+    results = {"overdue": [], "in_progress": [], "ga_threads": []}
     parts = html.split('<div class="structItem structItem--thread')
     if len(parts) <= 1:
         return results
 
     for p in parts[1:]:
-        # 0. Skip deleted and redirect/moved threads
         tag_header = p[:p.find('>')] if '>' in p else p[:200]
         if "is-deleted" in tag_header or "structItem--deleted" in tag_header:
             continue
@@ -295,104 +265,104 @@ def parse_threads_from_html(html, section_cfg, now_ts, fetch_summaries=True):
             continue
         if re.search(r'title=["\'](?:Удалено|Deleted)["\']', p):
             continue
-        if re.search(r'class="[^"]*fa-trash[^"]*"', p):
-            continue
 
-        # 1. Thread URL & Title
-        thread_match = re.search(r'<a href="(/threads/[^"]+)"[^>]*>([\s\S]*?)</a>', p)
-        if not thread_match:
+        prefix_id = None
+        prefix_title = ""
+        m_prefix = re.search(r'label--primary\s+label--prefix(\d+)[^"]*"[^>]*>([\s\S]*?)</span>', p)
+        if m_prefix:
+            prefix_id = m_prefix.group(1).strip()
+            raw_title = m_prefix.group(2).strip()
+            prefix_title = re.sub(r'<[^>]+>', '', raw_title).strip()
+            
+        m_title = re.search(r'<div class="structItem-title"[^>]*>[\s\S]*?<a href="([^"]*)"[^>]*data-tp-primary="on"[^>]*>([\s\S]*?)</a>', p)
+        if not m_title:
+            m_title = re.search(r'<div class="structItem-title"[^>]*>[\s\S]*?<a href="([^"]*threads/[^"]*)"[^>]*>([\s\S]*?)</a>', p)
+        if not m_title:
             continue
             
-        thread_href = thread_match.group(1).split("/unread")[0]
-        thread_url = "https://forum.blackrussia.online" + thread_href if thread_href.startswith("/") else thread_href
+        raw_url = m_title.group(1)
+        raw_thread_title = m_title.group(2).strip()
+        thread_title = re.sub(r'<[^>]+>', '', raw_thread_title).strip()
+        
+        thread_url = raw_url if raw_url.startswith("http") else "https://forum.blackrussia.online" + raw_url
         if not thread_url.endswith("/"):
             thread_url += "/"
-        title = re.sub(r'<[^>]+>', '', thread_match.group(2)).strip()
-        if title.lower().startswith("[удалено]") or title.lower().startswith("(удалено)"):
-            continue
-        
-        # 2. Author
-        author_match = re.search(r'data-author="([^"]+)"', p)
-        author = author_match.group(1) if author_match else "Неизвестно"
-        
-        # 3. Prefix
-        prefix_match = re.search(r'prefix_id=(\d+)[^"]*"[^>]*>([\s\S]*?)</a>', p)
-        p_name = ""
-        p_id = ""
-        raw_prefix = ""
-        if prefix_match:
-            p_id = prefix_match.group(1)
-            raw_prefix = re.sub(r'<[^>]+>', '', prefix_match.group(2)).strip()
-            p_name = raw_prefix.lower()
-        else:
-            label_match = re.search(r'<span class="label[^"]*"[^>]*>([\s\S]*?)</span>', p)
-            if label_match:
-                raw_prefix = re.sub(r'<[^>]+>', '', label_match.group(1)).strip()
-                p_name = raw_prefix.lower()
             
-        is_ga = (p_id == "12" or "главному администратору" in p_name)
-        is_target_prefix = False
-        
-        if p_id in section_cfg["target_prefix_ids"]:
-            is_target_prefix = True
+        author = "Неизвестно"
+        m_author = re.search(r'data-xf-init="member-tooltip"[^>]*>([\s\S]*?)</a>', p)
+        if m_author:
+            author = re.sub(r'<[^>]+>', '', m_author.group(1)).strip()
         else:
-            for t_name in section_cfg["target_prefix_names"]:
-                if t_name in p_name:
-                    is_target_prefix = True
-                    break
+            m_author_struct = re.search(r'<a href="[^"]*members/[^"]*"[^>]*class="username"[^>]*>([\s\S]*?)</a>', p)
+            if m_author_struct:
+                author = re.sub(r'<[^>]+>', '', m_author_struct.group(1)).strip()
+
+        created_ts = None
+        m_time = re.search(r'<time[^>]*data-time="(\d+)"', p)
+        if m_time:
+            created_ts = int(m_time.group(1))
+        else:
+            m_time_dt = re.search(r'<time[^>]*datetime="([^"]+)"', p)
+            if m_time_dt:
+                try:
+                    dt_str = m_time_dt.group(1)
+                    clean_dt = dt_str[:19]
+                    created_ts = int(datetime.strptime(clean_dt, "%Y-%m-%dT%H:%M:%S").timestamp())
+                except:
+                    pass
                     
-        if not is_target_prefix and not is_ga:
+        if not created_ts:
             continue
-            
-        # 4. Date and time creation
-        time_match = re.search(r'<time[^>]*class="[^"]*u-dt"[^>]*data-time="(\d+)"', p)
-        if not time_match:
-            time_match = re.search(r'<time[^>]*data-time="(\d+)"', p)
-        created_ts = int(time_match.group(1)) if time_match else now_ts
-            
-        # 5. Deadline calculation
-        deadline_sec = section_cfg["deadline_hours"] * 3600
-        deadline_ts = created_ts + deadline_sec
-        diff_sec = deadline_ts - now_ts
+
+        deadline_seconds = section_cfg["deadline_hours"] * 3600
+        time_elapsed = now_ts - created_ts
+        time_left_sec = deadline_seconds - time_elapsed
+        is_overdue = time_left_sec <= 0
         
-        if diff_sec > 0:
-            hours = int(diff_sec // 3600)
-            mins = int((diff_sec % 3600) // 60)
-            time_left_str = f"{hours} ч. {mins} мин."
-            is_overdue = False
+        if is_overdue:
+            overdue_sec = abs(time_left_sec)
+            ov_hours = overdue_sec // 3600
+            ov_mins = (overdue_sec % 3600) // 60
+            time_left_str = f"ПРОСРОЧЕНО на {ov_hours} ч. {ov_mins} мин."
         else:
-            over_sec = abs(diff_sec)
-            over_hours = int(over_sec // 3600)
-            over_mins = int((over_sec % 3600) // 60)
-            time_left_str = f"ПРОСРОЧЕНО на {over_hours} ч. {over_mins} мин."
-            is_overdue = True
+            left_hours = time_left_sec // 3600
+            left_mins = (time_left_sec % 3600) // 60
+            time_left_str = f"{left_hours} ч. {left_mins} мин."
+
+        is_ga = False
+        if prefix_id == "12" or "главному администратору" in prefix_title.lower():
+            is_ga = True
             
-        item = {
-            "title": title,
+        is_target_prefix = False
+        if prefix_id and prefix_id in section_cfg["target_prefix_ids"]:
+            is_target_prefix = True
+        elif prefix_title and prefix_title.lower() in section_cfg["target_prefix_names"]:
+            is_target_prefix = True
+
+        thread_data = {
+            "title": thread_title,
             "url": thread_url,
             "author": author,
-            "prefix": raw_prefix.capitalize() if raw_prefix else p_name.capitalize(),
-            "prefix_id": p_id,
+            "prefix": prefix_title or "Без префикса",
+            "prefix_id": prefix_id,
             "created_timestamp": created_ts,
             "deadline_hours": section_cfg["deadline_hours"],
             "time_left_str": time_left_str,
             "is_overdue": is_overdue,
             "is_ga": is_ga
         }
-        
-        if is_ga and section_cfg.get("check_ga"):
-            # Fetch summary for up to 5 GA threads
-            if fetch_summaries and len(results["ga_threads"]) < 5:
-                item["summary"] = fetch_thread_summary(thread_url)
+
+        if section_cfg.get("check_ga") and is_ga:
+            if fetch_summaries:
+                thread_data["summary"] = fetch_thread_summary(thread_data["url"])
+            results["ga_threads"].append(thread_data)
+
+        if is_target_prefix or (section_cfg.get("check_ga") and is_ga):
+            if is_overdue:
+                results["overdue"].append(thread_data)
             else:
-                item["summary"] = ""
-            results["ga_threads"].append(item)
-            
-        if is_overdue:
-            results["overdue"].append(item)
-        else:
-            results["in_progress"].append(item)
-            
+                results["in_progress"].append(thread_data)
+
     return results
 
 def run_full_audit(section_filter=None, fetch_summaries=True):
@@ -401,11 +371,9 @@ def run_full_audit(section_filter=None, fetch_summaries=True):
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "sections": {}
     }
-    
     for sec in SECTIONS_CONFIG:
         if section_filter and sec["id"] != section_filter:
             continue
-            
         sec_result = {
             "title": sec["title"],
             "deadline_hours": sec["deadline_hours"],
@@ -423,7 +391,6 @@ def run_full_audit(section_filter=None, fetch_summaries=True):
             sec_result["in_progress"].extend(parsed["in_progress"])
             sec_result["ga_threads"].extend(parsed["ga_threads"])
             
-        # Deduplicate by URL
         for key in ["overdue", "in_progress", "ga_threads"]:
             unique_items = []
             seen_urls = set()
@@ -434,7 +401,6 @@ def run_full_audit(section_filter=None, fetch_summaries=True):
             sec_result[key] = unique_items
             
         report["sections"][sec["id"]] = sec_result
-        
     return report
 
 def main():
@@ -442,7 +408,6 @@ def main():
     parser.add_argument("--section", type=str, default=None, help="Filter to specific section id")
     parser.add_argument("--skip-summaries", action="store_true", help="Do not fetch individual thread summaries")
     args = parser.parse_args()
-    
     report = run_full_audit(section_filter=args.section, fetch_summaries=not args.skip_summaries)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
