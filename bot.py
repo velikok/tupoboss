@@ -5,6 +5,7 @@ import uuid
 import time
 import threading
 import html
+import re
 
 if sys.platform == "win32":
     try:
@@ -23,15 +24,6 @@ import sheets_runner
 from sheets_runner import run_sheets_audit
 import forum_runner
 from forum_runner import get_overdue_and_urgent_report, get_ga_complaints_report, get_full_forum_report
-try:
-    import forum_copilot
-except Exception:
-    forum_copilot = None
-
-try:
-    import forum_actions
-except Exception:
-    forum_actions = None
 
 try:
     import rules_kb
@@ -241,13 +233,6 @@ def is_admin(user_id):
             return True
     return False
 
-def can_use_copilot(user_id):
-    if not user_id:
-        return True
-    if str(user_id) == "5594041416":
-        return False
-    return is_admin(user_id)
-
 def get_main_keyboard(user_id=None):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, is_persistent=True)
     b_sheets = types.KeyboardButton("📊 Проверить таблицы")
@@ -258,9 +243,6 @@ def get_main_keyboard(user_id=None):
     b_alerts = types.KeyboardButton("🔔 Авто-алерты")
     markup.add(b_sheets, b_overdue)
     markup.add(b_ga, b_full_forum)
-    if str(user_id) != "5594041416":
-        b_copilot = types.KeyboardButton("⚖️ Разбор обжалований")
-        markup.add(b_copilot)
     markup.add(b_ai, b_alerts)
     return markup
 
@@ -274,130 +256,11 @@ def get_main_inline_keyboard(user_id=None):
         types.InlineKeyboardButton("👑 Жалобы ГА", callback_data="menu:ga"),
         types.InlineKeyboardButton("📑 Полный аудит форума", callback_data="menu:full_forum")
     )
-    if str(user_id) != "5594041416":
-        markup.add(types.InlineKeyboardButton("⚖️ Разбор обжалований", callback_data="menu:copilot"))
     markup.add(
         types.InlineKeyboardButton("⚙️ Настройки ИИ", callback_data="menu:ai"),
         types.InlineKeyboardButton("🔔 Авто-алерты", callback_data="menu:alerts")
     )
     return markup
-
-
-def build_copilot_card(item):
-    info = item.get("info", {})
-    verdict = item.get("verdict", {})
-    
-    title = html.escape(str(info.get("title", "")))
-    author = html.escape(str(info.get("author", "")))
-    url = info.get("url", "")
-    prefix = html.escape(str(verdict.get("prefix") or "Без префикса"))
-    dest = verdict.get("destination_node")
-    reply_text = html.escape(str(verdict.get("reply_text") or ""))
-    
-    raw_analysis = str(verdict.get("ai_analysis") or verdict.get("explanation") or "")
-    if len(raw_analysis) > 750:
-        raw_analysis = raw_analysis[:750] + "..."
-    ai_analysis = html.escape(raw_analysis)
-    
-    action_desc = f"Префикс: <b>[{prefix}]</b>"
-    if dest:
-        action_desc += f" ➔ Перенос в раздел <code>{html.escape(str(dest))}</code>"
-    if verdict.get("stick"):
-        action_desc += " + Закрепить 📌"
-
-    reply_block = f"<blockquote>{reply_text}</blockquote>" if reply_text else "<i>(без текста ответа)</i>"
-
-    text = (
-        f"🤖 <b>РАЗБОР ОБЖАЛОВАНИЯ #{info.get('thread_id')} (DEEPSEEK)</b>\n\n"
-        f"📌 <b>Тема:</b> <a href='{url}'><b>{title}</b></a>\n"
-        f"👤 <b>Автор:</b> <code>{author}</code>\n\n"
-        f"💡 <b>Вердикт нейросети:</b>\n<i>{ai_analysis}</i>\n\n"
-        f"📝 <b>Ответ для форума:</b>\n"
-        f"{reply_block}\n\n"
-        f"🎯 <b>Действие:</b> {action_desc}"
-    )
-    
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("🚀 Отправить вердикт на форум", callback_data="cp_exec"))
-    markup.add(
-        types.InlineKeyboardButton("✏️ Изменить текст", callback_data="cp_edit_text"),
-        types.InlineKeyboardButton("🔄 Сменить вердикт", callback_data="cp_change_action")
-    )
-    markup.add(
-        types.InlineKeyboardButton("⏭ Пропустить тему", callback_data="cp_skip"),
-        types.InlineKeyboardButton("🔙 Закрыть", callback_data="close_settings")
-    )
-    return text, markup
-
-def start_copilot_review(chat_id, user_id):
-    if not can_use_copilot(user_id):
-        return
-    u_state = user_states.setdefault(user_id, {})
-    seen = u_state.setdefault("copilot_seen", set())
-    
-    msg = bot.send_message(chat_id, "🔍 Сканирую «Обжалование наказаний» в поисках открытых тем...")
-    importlib.reload(forum_copilot)
-    info = forum_copilot.get_next_pending_thread(exclude_thread_ids=seen)
-    if not info:
-        item_old = forum_copilot.get_next_pending_appeal(exclude_thread_ids=seen)
-        info = item_old.get("info") if item_old else None
-        
-    if not info:
-        try:
-            bot.delete_message(chat_id, msg.message_id)
-        except Exception:
-            pass
-        bot.send_message(
-            chat_id,
-            "✅ <b>Отлично! В разделе «Обжалование наказаний» нет открытых тем, требующих ответа.</b>",
-            reply_markup=get_main_keyboard(user_id)
-        )
-        return
-        
-    th_id = info.get("thread_id")
-    seen.add(str(th_id))
-    
-    try:
-        bot.edit_message_text(
-            f"🤖 <b>DeepSeek анализирует тему #{th_id}...</b>\n\n<i>Применяю базу правил и регламенты Toshiro Forester...</i>",
-            chat_id,
-            msg.message_id
-        )
-    except Exception:
-        pass
-        
-    # Call DeepSeek with Toshiro knowledge prompt!
-    cfg = load_config()
-    importlib.reload(ai_handler)
-    
-    ai_prompt = (
-        f"Проанализируй тему обжалования #{th_id}:\n"
-        f"Заголовок: {info['title']}\n"
-        f"Автор: {info['author']}\n"
-        f"Ссылка: {info['url']}\n"
-        f"Текст первого сообщения:\n{info['body'][:2500]}\n\n"
-        "Сделай разбор по официальным правилам Black Russia и регламенту Toshiro Forester. Дай точный вердикт (действие, префикс, пункт правил) и готовый текст ответа для форума."
-    )
-    
-    ai_reply = ai_handler.send_ai_query(
-        prompt=ai_prompt,
-        config=cfg,
-        system_prompt=ai_handler.get_toshiro_admin_system_prompt()
-    )
-    
-    verdict = ai_handler.parse_ai_verdict(ai_reply, th_id)
-    verdict["ai_analysis"] = ai_reply
-    
-    item = {"info": info, "verdict": verdict}
-    u_state["active_copilot"] = item
-    
-    try:
-        bot.delete_message(chat_id, msg.message_id)
-    except Exception:
-        pass
-        
-    card_text, markup = build_copilot_card(item)
-    bot.send_message(chat_id, card_text, reply_markup=markup, disable_web_page_preview=True)
 
 def build_alerts_settings_content(cfg=None):
     if cfg is None:
@@ -461,24 +324,28 @@ def build_ai_settings_content():
     # List of all configured profiles
     buttons = []
     for pid, prof in profiles.items():
-        is_active = (pid == active_id)
-        icon = "🟢 " if is_active else "⚪️ "
-        key_icon = "🔑" if prof.get("api_key") else "❌"
-        btn_text = f"{icon}{prof.get('name', pid)} [{key_icon}]"
+        is_cur = (pid == active_id)
+        p_icon = DEFAULT_TEMPLATES.get(prof.get("type", "custom"), {}).get("icon", "🤖")
+        btn_text = f"{'✅ ' if is_cur else ''}{p_icon} {prof.get('name', pid)}"
         buttons.append(types.InlineKeyboardButton(btn_text, callback_data=f"sel_prof:{pid}"))
         
     for i in range(0, len(buttons), 2):
         if i + 1 < len(buttons):
-            markup.add(buttons[i], buttons[i+1])
+            markup.row(buttons[i], buttons[i+1])
         else:
-            markup.add(buttons[i])
+            markup.row(buttons[i])
             
-    # Management buttons
-    markup.add(types.InlineKeyboardButton("➕ Добавить новый API", callback_data="add_new_api_menu"))
-    markup.add(types.InlineKeyboardButton("🔄 Обновить остаток лимита", callback_data="refresh_ai_limits"))
     markup.add(
-        types.InlineKeyboardButton("✏️ Сменить ключ/модель", callback_data="edit_active_prof"),
-        types.InlineKeyboardButton("🗑 Удалить API", callback_data="del_api_menu")
+        types.InlineKeyboardButton("➕ Добавить новый API", callback_data="add_new_api_menu"),
+        types.InlineKeyboardButton("🔄 Обновить лимиты", callback_data="refresh_ai_limits")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔑 Сменить ключ", callback_data=f"edit_key:{active_id}"),
+        types.InlineKeyboardButton("🤖 Сменить модель", callback_data=f"edit_model:{active_id}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🏷 Переименовать", callback_data=f"edit_name:{active_id}"),
+        types.InlineKeyboardButton("🗑 Удалить профиль", callback_data="del_api_menu")
     )
     markup.add(types.InlineKeyboardButton("🔙 Закрыть", callback_data="close_settings"))
     
@@ -527,12 +394,6 @@ def handle_start(message):
         reply_markup=get_main_keyboard(message.from_user.id)
     )
 
-@bot.message_handler(commands=['copilot', 'review'])
-def handle_copilot_cmd(message):
-    if not can_use_copilot(message.from_user.id):
-        return
-    start_copilot_review(message.chat.id, message.from_user.id)
-
 @bot.message_handler(commands=['alerts'])
 def handle_alerts_cmd(message):
     if not is_admin(message.from_user.id):
@@ -578,7 +439,7 @@ def handle_rules_cmd(message):
 
 # Text button handlers
 @bot.message_handler(func=lambda m: is_admin(m.from_user.id) and m.text in [
-    "📊 Проверить таблицы", "🚨 Просрочки на форуме", "👑 Жалобы ГА", "📑 Полный аудит форума", "⚙️ Настройки ИИ", "🔔 Авто-алерты", "⚖️ Разбор обжалований"
+    "📊 Проверить таблицы", "🚨 Просрочки на форуме", "👑 Жалобы ГА", "📑 Полный аудит форума", "⚙️ Настройки ИИ", "🔔 Авто-алерты"
 ])
 def handle_menu_buttons(message):
     chat_id = message.chat.id
@@ -631,12 +492,6 @@ def handle_menu_buttons(message):
     elif text == "🔔 Авто-алерты":
         info, markup = build_alerts_settings_content()
         bot.send_message(chat_id, info, reply_markup=markup)
-
-    elif text == "⚖️ Разбор обжалований":
-        if not can_use_copilot(message.from_user.id):
-            bot.send_message(chat_id, "Главное меню:", reply_markup=get_main_keyboard(message.from_user.id))
-            return
-        start_copilot_review(chat_id, message.from_user.id)
 
 # Inline Keyboard Callbacks
 @bot.callback_query_handler(func=lambda call: is_admin(call.from_user.id))
@@ -695,14 +550,6 @@ def handle_callbacks(call):
         send_long_message(chat_id, report)
         return
 
-    elif data == "menu:copilot":
-        if not can_use_copilot(user_id):
-            bot.answer_callback_query(call.id, "⛔️ Доступ ограничен.", show_alert=True)
-            return
-        bot.answer_callback_query(call.id, "⚖️ Запуск разбора обжалований...")
-        start_copilot_review(chat_id, user_id)
-        return
-
     elif data == "menu:ai":
         bot.answer_callback_query(call.id, "⚙️ Настройки ИИ")
         info, markup = build_ai_settings_content()
@@ -757,51 +604,15 @@ def handle_callbacks(call):
     elif data.startswith("create_type:"):
         p_type = data.split(":", 1)[1]
         t_info = DEFAULT_TEMPLATES.get(p_type, DEFAULT_TEMPLATES["custom"])
-        
-        if p_type == "custom":
-            user_states[user_id] = {
-                "action": "wait_custom_name",
-                "type": "custom"
-            }
-            msg = (
-                "🌐 <b>Добавление своего API (Custom)</b>\n\n"
-                "<b>Шаг 1/4:</b> Введите понятное название для этого профиля\n"
-                "(например: <code>Groq Llama 3</code> или <code>Мой Сервер</code>):"
-            )
-        else:
-            user_states[user_id] = {
-                "action": "wait_api_name",
-                "type": p_type,
-                "default_model": t_info["model"],
-                "default_base_url": t_info["base_url"]
-            }
-            msg = (
-                f"{t_info['icon']} <b>Добавление API: {t_info['name']}</b>\n\n"
-                "<b>Шаг 1/2:</b> Введите понятное название для этого ключа\n"
-                f"(например: <code>{t_info['name']} #2</code> или <code>Личный</code>):\n\n"
-                "<i>Отправьте <code>-</code>, чтобы назвать автоматически.</i>"
-            )
-        bot.edit_message_text(msg, chat_id, call.message.message_id)
-        
-    # 5. Edit active profile menu
-    elif data == "edit_active_prof":
-        cfg = load_config()
-        active_id, active_prof = get_active_profile(cfg)
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("🔑 Сменить API-ключ", callback_data=f"edit_key:{active_id}"))
-        markup.add(types.InlineKeyboardButton("🤖 Сменить модель", callback_data=f"edit_model:{active_id}"))
-        markup.add(types.InlineKeyboardButton("🏷 Переименовать профиль", callback_data=f"edit_name:{active_id}"))
-        markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_settings"))
-        
+        user_states[user_id] = {"action": "wait_api_name", "type": p_type}
         bot.edit_message_text(
-            f"✏️ <b>Редактирование профиля: {active_prof.get('name', active_id)}</b>\n\n"
-            f"Текущая модель: <code>{active_prof.get('model', '')}</code>\n\n"
-            "Что вы хотите изменить?",
+            f"✏️ <b>Шаг 1/2: Придумайте название для нового {t_info['name']}</b>\n\n"
+            f"Отправьте название профиля следующим сообщением в этот чат (например: <code>Мой {t_info['name']}</code> или <code>-</code> для названия по умолчанию):",
             chat_id,
-            call.message.message_id,
-            reply_markup=markup
+            call.message.message_id
         )
-        
+
+    # 5. Profile management
     elif data.startswith("edit_key:"):
         prof_id = data.split(":", 1)[1]
         cfg = load_config()
@@ -912,121 +723,6 @@ def handle_callbacks(call):
             msg_text = "✅ <b>Отлично! Просроченных и критически горящих тем на форуме нет.</b>"
         send_long_message(chat_id, msg_text)
 
-
-    # --- COPILOT CALLBACKS ---
-    elif data == "cp_exec":
-        if not can_use_copilot(user_id):
-            bot.answer_callback_query(call.id, "⛔️ Доступ ограничен.", show_alert=True)
-            return
-
-        u_state = user_states.get(user_id, {})
-        item = u_state.get("active_copilot")
-        if not item:
-            bot.answer_callback_query(call.id, "⚠️ Данные темы устарели")
-            return
-            
-        bot.answer_callback_query(call.id, "⏳ Применяю вердикт на форуме...")
-        try:
-            bot.edit_message_text("⏳ <b>Отправляю ответ и выполняю действие на форуме...</b>", chat_id, call.message.message_id)
-        except Exception:
-            pass
-            
-        importlib.reload(forum_actions)
-        th_id = item["info"].get("thread_id")
-        res = forum_actions.execute_copilot_verdict(th_id, item["verdict"])
-        
-        bot.send_message(chat_id, f"🎉 <b>Результат по теме #{th_id}:</b>\n\n{res}\n\n<i>Перехожу к следующей теме...</i>")
-        time.sleep(2)
-        start_copilot_review(chat_id, user_id)
-        
-    elif data == "cp_skip":
-        if not can_use_copilot(user_id):
-            return
-        bot.answer_callback_query(call.id, "⏭ Пропускаю тему...")
-        u_state = user_states.setdefault(user_id, {})
-        item = u_state.get("active_copilot")
-        if item and item.get("info", {}).get("thread_id"):
-            seen = u_state.setdefault("copilot_seen", set())
-            seen.add(str(item["info"]["thread_id"]))
-        try:
-            bot.delete_message(chat_id, call.message.message_id)
-        except Exception:
-            pass
-        start_copilot_review(chat_id, user_id)
-        
-    elif data == "cp_edit_text":
-        if not can_use_copilot(user_id):
-            return
-        bot.answer_callback_query(call.id, "✏️ Введите новый текст")
-        u_state = user_states.setdefault(user_id, {})
-        u_state["action"] = "wait_copilot_custom_text"
-        bot.send_message(
-            chat_id,
-            "✍️ <b>Введите новый текст ответа для форума следующим сообщением:</b>\n\n"
-            "<i>(Или отправьте <code>-</code> для отмены)</i>"
-        )
-        
-    elif data == "cp_change_action":
-        if not can_use_copilot(user_id):
-            return
-        bot.answer_callback_query(call.id, "🔄 Смена действия")
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("🟢 Одобрить (сокращение наказания)", callback_data="cp_act:reduce"),
-            types.InlineKeyboardButton("🔴 Отказать (наказание выдано верно)", callback_data="cp_act:refuse"),
-            types.InlineKeyboardButton("📁 Перенести в тех. раздел (1199)", callback_data="cp_act:tech"),
-            types.InlineKeyboardButton("📌 Перенести в жалобы на админов (842)", callback_data="cp_act:admin_move"),
-            types.InlineKeyboardButton("❌ Отказать (нет окна бана)", callback_data="cp_act:noban"),
-            types.InlineKeyboardButton("🔙 Назад к карточке", callback_data="cp_act:back")
-        )
-        bot.edit_message_text("🔄 <b>Выберите действие/вердикт для этой темы:</b>", chat_id, call.message.message_id, reply_markup=markup)
-        
-    elif data.startswith("cp_act:"):
-        sub_act = data.split(":", 1)[1]
-        u_state = user_states.get(user_id, {})
-        item = u_state.get("active_copilot")
-        if not item:
-            bot.answer_callback_query(call.id, "⚠️ Данные темы устарели")
-            return
-            
-        author = item["info"].get("author", "Игрок")
-        greeting = forum_copilot.get_greeting()
-        
-        if sub_act == "reduce":
-            item["verdict"]["action"] = "REPLY_APPROVE"
-            item["verdict"]["prefix"] = "Одобрено"
-            item["verdict"]["reply_text"] = f"{greeting}, уважаемый(-ая) {author}\n\nВаше обжалование рассмотрено и принято решение о сокращении вашего наказания.\n\nОдобрено."
-            item["verdict"]["explanation"] = "Принудительно выбрано сокращение наказания."
-            item["verdict"]["destination_node"] = None
-        elif sub_act == "refuse":
-            item["verdict"]["action"] = "REPLY_CLOSE"
-            item["verdict"]["prefix"] = "Отказано"
-            item["verdict"]["reply_text"] = f"{greeting}, уважаемый(-ая) {author}\n\nАдминистратор предоставил доказательства.\nНаказание выдано верно.\n\nЗакрыто."
-            item["verdict"]["explanation"] = "Принудительно выбран отказ (наказание верно)."
-            item["verdict"]["destination_node"] = None
-        elif sub_act == "tech":
-            item["verdict"]["action"] = "MOVE_TECH"
-            item["verdict"]["prefix"] = "На рассмотрении"
-            item["verdict"]["destination_node"] = forum_copilot.FORUM_TECH_NODE
-            item["verdict"]["reply_text"] = f"{greeting}, уважаемый(-ая) {author}\n\n Ошиблись разделом!\n Переношу вашу тему в раздел жалоб на технических специалистов!\n\nВ ожидании"
-            item["verdict"]["explanation"] = "Принудительно выбран перенос в тех. раздел."
-        elif sub_act == "admin_move":
-            item["verdict"]["action"] = "MOVE_ADMIN_COMPLAINTS"
-            item["verdict"]["prefix"] = None
-            item["verdict"]["destination_node"] = forum_copilot.FORUM_ADMIN_COMPLAINTS_NODE
-            item["verdict"]["reply_text"] = ""
-            item["verdict"]["stick"] = True
-            item["verdict"]["explanation"] = "Принудительно выбран перенос в жалобы на администрацию без ответа."
-        elif sub_act == "noban":
-            item["verdict"]["action"] = "REPLY_CLOSE"
-            item["verdict"]["prefix"] = "Закрыто"
-            item["verdict"]["reply_text"] = "Вы не прикрепили окно бана. Создайте новую тему и прикрепите туда окно бана.\n\nЗакрыто."
-            item["verdict"]["explanation"] = "Принудительно выбран отказ (нет окна бана)."
-            item["verdict"]["destination_node"] = None
-            
-        card_text, markup = build_copilot_card(item)
-        bot.edit_message_text(card_text, chat_id, call.message.message_id, reply_markup=markup, disable_web_page_preview=True)
-
     # 8. Close settings
     elif data == "close_settings":
         try:
@@ -1043,19 +739,6 @@ def handle_text_interaction(message):
     
     state = user_states.get(user_id)
     
-    # --- FLOW: Copilot edit reply text ---
-    if state and state.get("action") == "wait_copilot_custom_text":
-        item = state.get("active_copilot")
-        if text != "-" and item:
-            item["verdict"]["reply_text"] = text
-            bot.send_message(chat_id, "✅ <b>Текст ответа обновлён!</b>")
-            card_text, markup = build_copilot_card(item)
-            bot.send_message(chat_id, card_text, reply_markup=markup, disable_web_page_preview=True)
-        else:
-            bot.send_message(chat_id, "Редактирование текста отменено.")
-        state.pop("action", None)
-        return
-
     # --- FLOW: Add standard API ---
     if state and state.get("action") == "wait_api_name":
         p_type = state["type"]
@@ -1078,185 +761,118 @@ def handle_text_interaction(message):
     if state and state.get("action") == "wait_new_key":
         p_type = state["type"]
         name = state["name"]
-        model = state.get("default_model", "")
-        base_url = state.get("default_base_url", "")
-        api_key = text
+        key = text
         
-        bot.send_message(chat_id, "⏳ Проверяю валидность ключа...")
-        ok, res_msg = test_ai_key(p_type, api_key, base_url, model)
-        
-        # Delete user's message with key
         try:
             bot.delete_message(chat_id, message.message_id)
         except:
             pass
             
-        cfg = load_config()
-        prof_id = f"prof_{uuid.uuid4().hex[:8]}"
+        t_info = DEFAULT_TEMPLATES.get(p_type, DEFAULT_TEMPLATES["custom"])
+        new_id = f"prof_{uuid.uuid4().hex[:8]}"
+        
         new_prof = {
-            "id": prof_id,
+            "id": new_id,
             "name": name,
             "type": p_type,
-            "model": model,
-            "base_url": base_url,
-            "api_key": api_key
+            "model": t_info["model"],
+            "base_url": t_info["base_url"],
+            "api_key": key
         }
-        cfg.setdefault("ai_profiles", {})[prof_id] = new_prof
-        cfg["active_profile_id"] = prof_id
+        
+        cfg = load_config()
+        cfg["ai_profiles"][new_id] = new_prof
+        cfg["active_profile_id"] = new_id
         save_config(cfg)
+        
         user_states.pop(user_id, None)
         
-        limit_str = get_ai_limit_info(new_prof, cfg)
-        status_line = "✅ Ключ подтверждён!" if ok else f"⚠️ Ключ сохранён ({res_msg})"
-        
-        bot.send_message(
-            chat_id,
-            f"🎉 <b>Новый API-профиль «{name}» успешно добавлен и активирован!</b>\n\n"
-            f"📌 Статус проверки: {status_line}\n"
-            f"🤖 Модель: <code>{model}</code>\n"
-            f"📊 <b>Остаток лимита / Баланс:</b> <code>{limit_str}</code>",
-            reply_markup=get_main_keyboard(user_id)
-        )
+        bot.send_message(chat_id, f"🎉 <b>Профиль «{name}» успешно создан и активирован!</b>")
+        info, markup = build_ai_settings_content()
+        bot.send_message(chat_id, info, reply_markup=markup)
         return
 
-    # --- FLOW: Add Custom API ---
-    if state and state.get("action") == "wait_custom_name":
-        state["name"] = text
-        state["action"] = "wait_custom_url"
-        bot.send_message(chat_id, "🌐 <b>Шаг 2/4:</b> Отправьте Base URL вашего OpenAI-совместимого сервиса\n(например: <code>https://api.groq.com/openai/v1</code>):")
-        return
-        
-    if state and state.get("action") == "wait_custom_url":
-        state["base_url"] = text
-        state["action"] = "wait_custom_model"
-        bot.send_message(chat_id, "🤖 <b>Шаг 3/4:</b> Отправьте название модели\n(например: <code>llama-3.3-70b-versatile</code> или <code>default</code>):")
-        return
-        
-    if state and state.get("action") == "wait_custom_model":
-        state["model"] = text
-        state["action"] = "wait_custom_key"
-        bot.send_message(chat_id, "🔑 <b>Шаг 4/4:</b> Отправьте API-ключ для этого сервиса (или любой текст, если ключ не требуется):")
-        return
-        
-    if state and state.get("action") == "wait_custom_key":
-        api_key = text
-        name = state["name"]
-        model = state["model"]
-        base_url = state["base_url"]
-        
+    # --- FLOW: Update existing key ---
+    if state and state.get("action") == "update_key":
+        prof_id = state["prof_id"]
+        key = text
         try:
             bot.delete_message(chat_id, message.message_id)
         except:
             pass
             
         cfg = load_config()
-        prof_id = f"prof_{uuid.uuid4().hex[:8]}"
-        new_prof = {
-            "id": prof_id,
-            "name": name,
-            "type": "custom",
-            "model": model,
-            "base_url": base_url,
-            "api_key": api_key
-        }
-        cfg.setdefault("ai_profiles", {})[prof_id] = new_prof
-        cfg["active_profile_id"] = prof_id
-        save_config(cfg)
+        if prof_id in cfg.get("ai_profiles", {}):
+            cfg["ai_profiles"][prof_id]["api_key"] = key
+            save_config(cfg)
+            p_name = cfg["ai_profiles"][prof_id].get("name", prof_id)
+            bot.send_message(chat_id, f"✅ Ключ для «{p_name}» успешно обновлен!")
+            
         user_states.pop(user_id, None)
-        
-        limit_str = get_ai_limit_info(new_prof, cfg)
-        bot.send_message(
-            chat_id,
-            f"🎉 <b>Свой API-профиль «{name}» успешно добавлен и активирован!</b>\n\n"
-            f"🤖 Модель: <code>{model}</code>\n"
-            f"🌐 URL: <code>{base_url}</code>\n"
-            f"📊 <b>Статус:</b> <code>{limit_str}</code>",
-            reply_markup=get_main_keyboard(user_id)
-        )
+        info, markup = build_ai_settings_content()
+        bot.send_message(chat_id, info, reply_markup=markup)
         return
 
-    # --- FLOW: Update existing profile ---
-    if state and state.get("action") == "update_key":
-        prof_id = state["prof_id"]
-        cfg = load_config()
-        prof = cfg.get("ai_profiles", {}).get(prof_id)
-        if prof:
-            prof["api_key"] = text
-            save_config(cfg)
-            try:
-                bot.delete_message(chat_id, message.message_id)
-            except:
-                pass
-            limit_str = get_ai_limit_info(prof, cfg)
-            bot.send_message(
-                chat_id,
-                f"✅ <b>Ключ для «{prof.get('name', prof_id)}» успешно обновлён!</b>\n\n"
-                f"📊 <b>Остаток лимита / Баланс:</b> <code>{limit_str}</code>",
-                reply_markup=get_main_keyboard(user_id)
-            )
-        user_states.pop(user_id, None)
-        return
-        
+    # --- FLOW: Update model ---
     if state and state.get("action") == "update_model":
         prof_id = state["prof_id"]
         cfg = load_config()
-        prof = cfg.get("ai_profiles", {}).get(prof_id)
-        if prof:
+        if prof_id in cfg.get("ai_profiles", {}):
+            prof = cfg["ai_profiles"][prof_id]
             prof["model"] = text
             save_config(cfg)
             bot.send_message(chat_id, f"✅ Модель для «{prof.get('name', prof_id)}» изменена на: <code>{text}</code>", reply_markup=get_main_keyboard(user_id))
         user_states.pop(user_id, None)
         return
-        
+
+    # --- FLOW: Update name ---
     if state and state.get("action") == "update_name":
         prof_id = state["prof_id"]
         cfg = load_config()
-        prof = cfg.get("ai_profiles", {}).get(prof_id)
-        if prof:
-            prof["name"] = text
+        if prof_id in cfg.get("ai_profiles", {}):
+            cfg["ai_profiles"][prof_id]["name"] = text
             save_config(cfg)
             bot.send_message(chat_id, f"✅ Профиль переименован в: <b>{text}</b>", reply_markup=get_main_keyboard(user_id))
         user_states.pop(user_id, None)
         return
 
-    # --- Normal message -> Chat with active AI! ---
-    cfg = load_config()
-    importlib.reload(ai_handler)
-    _, active_prof = ai_handler.get_active_profile(cfg)
-    
+    # Default: Send query to Active AI
     bot.send_chat_action(chat_id, "typing")
+    cfg = load_config()
     
-    # Check if user is Toshiro Forester
-    if user_id == 1399524277:
-        sys_prompt = ai_handler.get_toshiro_admin_system_prompt()
-    else:
-        sys_prompt = "Ты умный ассистент руководства проекта Black Russia. Помогаешь отвечать на общие вопросы."
-        
+    forum_match = re.search(r'https?://forum\.blackrussia\.online/threads/([^\s]+)', text)
+    sys_prompt = None
     ai_prompt = text
-    # Auto-fetch forum thread if link is provided
-    forum_match = re.search(r'https://forum\.blackrussia\.online/threads/[^\s]+', text)
+    
     if forum_match:
         th_url = forum_match.group(0)
-        try:
-            from forum_audit import solve_vddos_and_fetch_requests
-            th_html = solve_vddos_and_fetch_requests(th_url)
-            t_m = re.search(r'<h1 class="p-title-value">(.*?)</h1>', th_html, re.DOTALL)
+        bot.send_message(chat_id, f"🔍 Обнаружена ссылка на тему форума. Загружаю содержимое...")
+        import requests
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Cookie": f"xf_user={cfg.get('forum_xf_user', '')}; xf_tfa_trust={cfg.get('forum_xf_tfa_trust', '')}"
+        }
+        resp = requests.get(th_url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            html_text = resp.text
+            t_m = re.search(r'<h1 class="p-title-value">([^<]+)</h1>', html_text)
             th_title = re.sub(r'<[^>]+>', '', t_m.group(1)).strip() if t_m else ""
-            a_m = re.search(r'data-author="([^"]+)"', th_html)
+            a_m = re.search(r'data-author="([^"]+)"', html_text)
             th_author = a_m.group(1) if a_m else ""
-            p_m = re.search(r'<article class="message-body[^"]*">(.*?)</article>', th_html, re.DOTALL)
+            p_m = re.search(r'<article class="message-body[^>]*>(.*?)</article>', html_text, re.DOTALL)
             th_body = re.sub(r'<[^>]+>', ' ', p_m.group(1)).replace('&nbsp;', ' ').strip() if p_m else ""
-            th_body = re.sub(r'\s+', ' ', th_body)[:2500]
             
             ai_prompt = (
-                f"Тоширо прислал тему с форума: {th_url}\n"
-                f"Заголовок: {th_title}\n"
-                f"Автор темы: {th_author}\n"
-                f"Текст жалобы/обжалования:\n{th_body}\n\n"
-                f"Комментарий/вопрос Тоширо: {text}\n\n"
-                "Проанализируй данное обжалование по твоим регламентам и правилам, выдай точный вердикт (действие, префикс) и готовый текст ответа для форума."
+                f"Пользователь прислал ссылку на тему форума Black Russia:\n"
+                f"Название: {th_title}\n"
+                f"Автор: {th_author}\n"
+                f"Ссылка: {th_url}\n"
+                f"Текст темы:\n{th_body[:2500]}\n\n"
+                f"Вопрос пользователя: {text}\n"
+                f"Проанализируй суть темы и дай чёткий ответ или вердикт."
             )
-        except Exception:
+        else:
             ai_prompt = text
 
     ai_reply = ai_handler.send_ai_query(
@@ -1264,30 +880,6 @@ def handle_text_interaction(message):
         config=cfg,
         system_prompt=sys_prompt
     )
-
-    if forum_match and user_id == 1399524277:
-        th_id_m = re.search(r'threads/[^/]+\.(\d+)', th_url)
-        th_id = th_id_m.group(1) if th_id_m else None
-        if th_id:
-            parsed_v = ai_handler.parse_ai_verdict(ai_reply, th_id)
-            user_states.setdefault(user_id, {})["active_copilot"] = {
-                "info": {
-                    "thread_id": th_id,
-                    "title": th_title,
-                    "author": th_author,
-                    "url": th_url
-                },
-                "verdict": parsed_v
-            }
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(types.InlineKeyboardButton("🚀 Отправить вердикт на форум", callback_data="cp_exec"))
-            markup.add(
-                types.InlineKeyboardButton("✏️ Изменить текст", callback_data="cp_edit_text"),
-                types.InlineKeyboardButton("🔄 Сменить вердикт", callback_data="cp_change_action")
-            )
-            markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="cp_skip"))
-            bot.reply_to(message, ai_reply, reply_markup=markup)
-            return
 
     bot.reply_to(message, ai_reply)
 
@@ -1308,101 +900,95 @@ def check_for_alerts(force_all=False):
         sec_name = forum_runner.SECTION_NAMES.get(sec_id, forum_runner.fix_mojibake(s.get("title", sec_id)))
         
         # 1. Overdue
-        for ov in s.get("overdue", []):
-            url = ov.get("url", "")
-            if not url:
-                continue
+        for t in s.get("overdue_threads", []):
+            url = t["url"]
             current_urls.add(url)
-            prev = _notified_threads.get(url)
-            if force_all or not prev or prev.get("type") != "overdue":
-                _notified_threads[url] = {"type": "overdue", "time": now}
-                title = html.escape(forum_runner.fix_mojibake(ov.get("title", "Без названия")))
-                author = html.escape(forum_runner.fix_mojibake(ov.get("author", "")))
-                t_str = ov.get("time_left_str", "")
-                prefix = html.escape(forum_runner.fix_mojibake(ov.get("prefix", ""))).strip()
-                prefix_badge = f" [🏷 <b>{prefix}</b>]" if prefix else ""
+            hours_over = int(t.get("hours_overdue", 0))
+            if force_all or (url not in _notified_threads or (now - _notified_threads[url]) > 14400):
+                _notified_threads[url] = now
+                author = forum_runner.fix_mojibake(t.get("author", "Неизвестно"))
+                title = forum_runner.fix_mojibake(t.get("title", "Без названия"))
                 new_alerts.append(
-                    f"🔴 <b>[ПРОСРОЧКА] {sec_name}</b>\n"
-                    f"  ❌{prefix_badge} <a href='{url}'><b>{title}</b></a>\n"
-                    f"  👤 Автор: <code>{author}</code> | 🚨 <b>{t_str}</b>"
+                    f"🔴 <b>ПРОСРОЧКА В РАЗДЕЛЕ: {sec_name}</b>\n"
+                    f"📌 <b>Тема:</b> <a href='{url}'>{title}</a>\n"
+                    f"👤 <b>Автор:</b> <code>{author}</code>\n"
+                    f"⏳ <b>Просрочено на:</b> {hours_over} ч. (Лимит: 24 ч.)"
                 )
                 
         # 2. Urgent (< 4 hours)
-        urgent_list = forum_runner.extract_urgent_threads(s.get("in_progress", []), max_hours=4)
-        for ug in urgent_list:
-            url = ug.get("url", "")
-            if not url:
-                continue
+        for t in s.get("urgent_threads", []):
+            url = t["url"]
             current_urls.add(url)
-            if force_all or url not in _notified_threads:
-                _notified_threads[url] = {"type": "urgent", "time": now}
-                title = html.escape(forum_runner.fix_mojibake(ug.get("title", "Без названия")))
-                author = html.escape(forum_runner.fix_mojibake(ug.get("author", "")))
-                t_str = ug.get("time_left_str", "")
-                prefix = html.escape(forum_runner.fix_mojibake(ug.get("prefix", ""))).strip()
-                prefix_badge = f" [🏷 <b>{prefix}</b>]" if prefix else ""
+            left_h = int(t.get("hours_left", 0))
+            if force_all or (url not in _notified_threads or (now - _notified_threads[url]) > 14400):
+                _notified_threads[url] = now
+                author = forum_runner.fix_mojibake(t.get("author", "Неизвестно"))
+                title = forum_runner.fix_mojibake(t.get("title", "Без названия"))
                 new_alerts.append(
-                    f"⏳ <b>[ГОРЯЩИЙ ДЕДЛАЙН] {sec_name}</b>\n"
-                    f"  ⚠️{prefix_badge} <a href='{url}'><b>{title}</b></a>\n"
-                    f"  👤 Автор: <code>{author}</code> | ⏱ Осталось: <b>{t_str}</b>"
+                    f"⚠️ <b>СРОЧНО! СКОРО ПРОСРОЧКА ({sec_name})</b>\n"
+                    f"📌 <b>Тема:</b> <a href='{url}'>{title}</a>\n"
+                    f"👤 <b>Автор:</b> <code>{author}</code>\n"
+                    f"⏳ <b>Осталось до дедлайна:</b> менее {left_h} ч.!"
                 )
-
+                
         # 3. GA Threads
-        if sec_id == "admin_complaints":
-            for ga in s.get("ga_threads", []):
-                url = ga.get("url", "")
-                if not url:
-                    continue
-                current_urls.add(url)
-                ga_key = f"ga_{url}"
-                if force_all or ga_key not in _notified_threads:
-                    _notified_threads[ga_key] = {"type": "ga", "time": now}
-                    title = html.escape(forum_runner.fix_mojibake(ga.get("title", "Без названия")))
-                    author = html.escape(forum_runner.fix_mojibake(ga.get("author", "")))
-                    t_str = ga.get("time_left_str", "")
-                    new_alerts.append(
-                        f"👑 <b>[ТЕМА ГА] Жалобы на администрацию</b>\n"
-                        f"  ➔ <a href='{url}'><b>{title}</b></a>\n"
-                        f"  👤 Автор: <code>{author}</code> | ⏱ Осталось: <b>{t_str}</b>"
-                    )
-
-    if not force_all:
-        stale = [u for u in list(_notified_threads.keys()) if (u.replace("ga_", "") not in current_urls and now - _notified_threads[u]["time"] > 7200)]
-        for u in stale:
-            _notified_threads.pop(u, None)
-            
+        for t in s.get("ga_threads", []):
+            url = t["url"]
+            current_urls.add(url)
+            if force_all or (url not in _notified_threads or (now - _notified_threads[url]) > 86400):
+                _notified_threads[url] = now
+                author = forum_runner.fix_mojibake(t.get("author", "Неизвестно"))
+                title = forum_runner.fix_mojibake(t.get("title", "Без названия"))
+                summary = forum_runner.fix_mojibake(t.get("summary", ""))
+                sum_text = f"\n📝 <b>Суть:</b> <i>{summary}</i>" if summary else ""
+                new_alerts.append(
+                    f"👑 <b>ТЕМА ГЛАВНОМУ АДМИНИСТРАТОРУ ({sec_name})</b>\n"
+                    f"📌 <b>Тема:</b> <a href='{url}'>{title}</a>\n"
+                    f"👤 <b>Автор:</b> <code>{author}</code>{sum_text}"
+                )
+                
+    stale_urls = [u for u in _notified_threads if u not in current_urls and (now - _notified_threads[u]) > 86400]
+    for u in stale_urls:
+        _notified_threads.pop(u, None)
+        
     return new_alerts
 
 def background_forum_monitor():
-    time.sleep(20)
     while True:
-        try:
-            cfg = load_config()
-            if cfg.get("auto_alerts_enabled", True):
+        cfg = load_config()
+        if cfg.get("auto_alerts_enabled", True):
+            try:
                 alerts = check_for_alerts(force_all=False)
                 if alerts:
                     admins = cfg.get("admin_ids") or [1399524277, 5594041416]
-                    msg_text = "🚨🚨🚨 <b>АВТО-ОПОВЕЩЕНИЕ ПО ФОРУМУ AQUA!</b> 🚨🚨🚨\n\n" + "\n\n".join(alerts)
-                    for aid in admins:
+                    msg_body = "🚨 <b>ВНИМАНИЕ! ОПОВЕЩЕНИЕ ПО ФОРУМУ:</b>\n\n" + "\n\n".join(alerts)
+                    for adm_id in admins:
                         try:
-                            send_long_message(aid, msg_text)
-                        except Exception as e_send:
-                            print(f"Failed to send alert to {aid}: {e_send}", flush=True)
-        except Exception as e:
-            print(f"Background monitor loop error: {e}", flush=True)
-            
-        cfg = load_config()
-        interval = max(5, cfg.get("alert_interval_minutes", 30)) * 60
+                            send_long_message(adm_id, msg_body)
+                        except Exception as ex:
+                            print(f"[Alerts] Ошибка отправки админу {adm_id}: {ex}")
+            except Exception as e:
+                print(f"[Alerts] Ошибка фонового сканирования: {e}")
+                
+        interval = cfg.get("alert_interval_minutes", 30) * 60
         sleep_elapsed = 0
         while sleep_elapsed < interval:
             time.sleep(5)
             sleep_elapsed += 5
 
+def main():
+    print("🤖 Бот AQUA успешно запущен и готов к работе!")
+    
+    t = threading.Thread(target=background_forum_monitor, daemon=True)
+    t.start()
+    print("🔔 Фоновый мониторинг форума успешно активирован!")
+    
+    while True:
+        try:
+            bot.infinity_polling(timeout=20, long_polling_timeout=20)
+        except Exception as e:
+            print(f"⚠️ Ошибка polling: {e}. Перезапуск через 5 секунд...")
+            time.sleep(5)
+
 if __name__ == "__main__":
-    print("🤖 Бот AQUA успешно запущен и готов к работе!", flush=True)
-    threading.Thread(target=background_forum_monitor, daemon=True).start()
-    print("🔔 Фоновый мониторинг форума успешно активирован!", flush=True)
-    try:
-        bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
-    except Exception as e:
-        print(f"❌ Ошибка в polling: {e}", flush=True)
+    main()
