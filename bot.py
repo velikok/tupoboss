@@ -232,19 +232,24 @@ bot.reply_to = _safe_reply_to
 user_states = {}
 
 def is_admin(user_id):
+    if not user_id:
+        return False
     cfg = load_config()
     admins = cfg.get("admin_ids") or [1399524277, 5594041416]
-    return user_id in admins
+    for a in admins:
+        if str(a) == str(user_id):
+            return True
+    return False
 
 def can_use_copilot(user_id):
     if not user_id:
         return True
-    if user_id == 5594041416:
+    if str(user_id) == "5594041416":
         return False
     return is_admin(user_id)
 
 def get_main_keyboard(user_id=None):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, is_persistent=True)
     b_sheets = types.KeyboardButton("📊 Проверить таблицы")
     b_overdue = types.KeyboardButton("🚨 Просрочки на форуме")
     b_ga = types.KeyboardButton("👑 Жалобы ГА")
@@ -253,10 +258,28 @@ def get_main_keyboard(user_id=None):
     b_alerts = types.KeyboardButton("🔔 Авто-алерты")
     markup.add(b_sheets, b_overdue)
     markup.add(b_ga, b_full_forum)
-    if user_id != 5594041416:
+    if str(user_id) != "5594041416":
         b_copilot = types.KeyboardButton("⚖️ Разбор обжалований")
         markup.add(b_copilot)
     markup.add(b_ai, b_alerts)
+    return markup
+
+def get_main_inline_keyboard(user_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📊 Проверить таблицы", callback_data="menu:sheets"),
+        types.InlineKeyboardButton("🚨 Просрочки на форуме", callback_data="menu:overdue")
+    )
+    markup.add(
+        types.InlineKeyboardButton("👑 Жалобы ГА", callback_data="menu:ga"),
+        types.InlineKeyboardButton("📑 Полный аудит форума", callback_data="menu:full_forum")
+    )
+    if str(user_id) != "5594041416":
+        markup.add(types.InlineKeyboardButton("⚖️ Разбор обжалований", callback_data="menu:copilot"))
+    markup.add(
+        types.InlineKeyboardButton("⚙️ Настройки ИИ", callback_data="menu:ai"),
+        types.InlineKeyboardButton("🔔 Авто-алерты", callback_data="menu:alerts")
+    )
     return markup
 
 
@@ -493,9 +516,16 @@ def handle_start(message):
         "• <b>Форум:</b> просрочки, жалобы ГА с выжимкой сути, подфорумы на доработке.\n"
         "• <b>Авто-алерты:</b> фоновое оповещение при горящих дедлайнах (менее 4 ч.) и просрочках.\n"
         f"• <b>Активный ИИ:</b> <code>{active_prof.get('name', 'ИИ')}</code> (можно загружать любое количество API).\n\n"
-        "Выберите действие на клавиатуре ниже:"
+        "Выберите действие кнопками ниже:"
     )
-    bot.send_message(message.chat.id, welcome, reply_markup=get_main_keyboard(message.from_user.id))
+    # 1. Main message with interactive inline buttons right under text
+    bot.send_message(message.chat.id, welcome, reply_markup=get_main_inline_keyboard(message.from_user.id))
+    # 2. Pin persistent reply keyboard at the bottom
+    bot.send_message(
+        message.chat.id,
+        "⚡️ <i>Клавиатура быстрого доступа также закреплена внизу экрана:</i>",
+        reply_markup=get_main_keyboard(message.from_user.id)
+    )
 
 @bot.message_handler(commands=['copilot', 'review'])
 def handle_copilot_cmd(message):
@@ -616,8 +646,77 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     u_state = user_states.setdefault(user_id, {})
     
+    # 0. Main Menu Inline Actions
+    if data == "menu:sheets":
+        bot.answer_callback_query(call.id, "📊 Аудит таблиц...")
+        msg = bot.send_message(chat_id, "⏳ Экспортирую и проверяю Google Таблицы, подождите...")
+        importlib.reload(sheets_runner)
+        report = sheets_runner.run_sheets_audit()
+        try:
+            bot.delete_message(chat_id, msg.message_id)
+        except:
+            pass
+        send_long_message(chat_id, report)
+        return
+
+    elif data == "menu:overdue":
+        bot.answer_callback_query(call.id, "🚨 Проверка просрочек...")
+        msg = bot.send_message(chat_id, "⏳ Сканирую форум на предмет просрочек и горящих дедлайнов...")
+        importlib.reload(forum_runner)
+        report = forum_runner.get_overdue_and_urgent_report()
+        try:
+            bot.delete_message(chat_id, msg.message_id)
+        except:
+            pass
+        send_long_message(chat_id, report)
+        return
+
+    elif data == "menu:ga":
+        bot.answer_callback_query(call.id, "👑 Жалобы ГА...")
+        msg = bot.send_message(chat_id, "⏳ Загружаю темы с префиксом «Главному Администратору» и выжимку сути...")
+        importlib.reload(forum_runner)
+        report = forum_runner.get_ga_complaints_report()
+        try:
+            bot.delete_message(chat_id, msg.message_id)
+        except:
+            pass
+        send_long_message(chat_id, report)
+        return
+
+    elif data == "menu:full_forum":
+        bot.answer_callback_query(call.id, "📑 Полный аудит форума...")
+        msg = bot.send_message(chat_id, "⏳ Выполняю полный аудит всех 6 разделов и подразделов форума...")
+        importlib.reload(forum_runner)
+        report = forum_runner.get_full_forum_report()
+        try:
+            bot.delete_message(chat_id, msg.message_id)
+        except:
+            pass
+        send_long_message(chat_id, report)
+        return
+
+    elif data == "menu:copilot":
+        if not can_use_copilot(user_id):
+            bot.answer_callback_query(call.id, "⛔️ Доступ ограничен.", show_alert=True)
+            return
+        bot.answer_callback_query(call.id, "⚖️ Запуск разбора обжалований...")
+        start_copilot_review(chat_id, user_id)
+        return
+
+    elif data == "menu:ai":
+        bot.answer_callback_query(call.id, "⚙️ Настройки ИИ")
+        info, markup = build_ai_settings_content()
+        bot.send_message(chat_id, info, reply_markup=markup)
+        return
+
+    elif data == "menu:alerts":
+        bot.answer_callback_query(call.id, "🔔 Авто-алерты")
+        info, markup = build_alerts_settings_content()
+        bot.send_message(chat_id, info, reply_markup=markup)
+        return
+
     # 1. Switch active profile
-    if data.startswith("sel_prof:"):
+    elif data.startswith("sel_prof:"):
         prof_id = data.split(":", 1)[1]
         cfg = load_config()
         if prof_id in cfg.get("ai_profiles", {}):
