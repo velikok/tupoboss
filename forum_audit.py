@@ -69,6 +69,15 @@ def get_forum_credentials():
 
 _requests_session = None
 
+def reset_fast_session():
+    global _requests_session
+    if _requests_session is not None:
+        try:
+            _requests_session.close()
+        except Exception:
+            pass
+    _requests_session = None
+
 def get_fast_session():
     global _requests_session
     if _requests_session is not None:
@@ -94,11 +103,11 @@ def get_fast_session():
 
 def solve_vddos_and_fetch_requests(url, timeout=25):
     global LAST_ERROR, LAST_STATUS, IS_GUEST
-    s = get_fast_session()
-    if s is None:
-        LAST_ERROR = "Не установлены библиотеки requests или cryptography"
-        return ""
     for attempt in range(3):
+        s = get_fast_session()
+        if s is None:
+            LAST_ERROR = "Не установлены библиотеки requests или cryptography"
+            return ""
         try:
             r = s.get(url, timeout=timeout, allow_redirects=True)
             LAST_STATUS = r.status_code
@@ -113,13 +122,28 @@ def solve_vddos_and_fetch_requests(url, timeout=25):
                     r3actlb = (cipher.decryptor().update(ct) + cipher.decryptor().finalize()).hex()
                     s.cookies.set("R3ACTLB", r3actlb, domain="forum.blackrussia.online")
                     continue
+                else:
+                    reset_fast_session()
+                    time.sleep(0.5)
+                    continue
+            if r.status_code >= 400:
+                LAST_ERROR = f"HTTP {r.status_code}"
+                reset_fast_session()
+                time.sleep(0.5)
+                continue
             if 'data-logged-in="true"' not in text and 'data-user-id=' not in text:
                 IS_GUEST = True
+                if attempt == 0:
+                    reset_fast_session()
+                    time.sleep(0.5)
+                    continue
             else:
                 IS_GUEST = False
+            LAST_ERROR = None
             return text
         except Exception as e:
             LAST_ERROR = f"Ошибка подключения к форуму: {e}"
+            reset_fast_session()
             time.sleep(0.5)
     return ""
 
@@ -407,11 +431,14 @@ def parse_threads_from_html(html, section_cfg, now_ts, fetch_summaries=True):
     return results
 
 def run_full_audit(section_filter=None, fetch_summaries=True):
+    global LAST_ERROR, IS_GUEST
+    LAST_ERROR = None
+    IS_GUEST = False
     now_ts = int(time.time())
     report = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "is_guest": IS_GUEST,
-        "last_error": LAST_ERROR,
+        "is_guest": False,
+        "last_error": None,
         "sections": {}
     }
     

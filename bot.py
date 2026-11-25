@@ -5,7 +5,9 @@ import uuid
 import time
 import threading
 import html
-import re
+from datetime import datetime, timedelta, timezone
+
+MSK_TZ = timezone(timedelta(hours=3))
 
 if sys.platform == "win32":
     try:
@@ -276,11 +278,13 @@ def build_alerts_settings_content(cfg=None):
         "🔔 <b>АВТОМАТИЧЕСКИЙ МОНИТОРИНГ ФОРУМА</b>\n\n"
         f"• Статус фонового сканера: {st_icon} {st_text}\n"
         f"• Периодичность проверки: <b>каждые {interval} мин.</b>\n"
-        f"• Получатели оповещений: <b>{len(admins)} админа</b>\n\n"
+        f"• Получатели оповещений: <b>{len(admins)} админа</b>\n"
+        f"• Посл. проверка: <code>{_monitor_status.get('last_check_msk', 'Нет')}</code>\n"
+        f"• Статус сканера: <i>{html.escape(str(_monitor_status.get('last_result', 'Ожидание')))}</i>\n\n"
         "<b>Что отслеживается в реальном времени:</b>\n"
-        "• 🔴 <b>Просроченные темы</b> (моментальное оповещение)\n"
-        "• ⏳ <b>Горящие дедлайны</b> (осталось менее 4 часов)\n"
-        "• 👑 <b>Новые темы «Главному Администратору»</b>\n\n"
+        "• 🔴 <b>Просроченные темы</b> (моментально + повтор раз в 2 ч.)\n"
+        "• ⏳ <b>Горящие дедлайны</b> (менее 4 ч. и повтор менее 1 ч.)\n"
+        "• 👑 <b>Темы «Главному Администратору»</b> (+ повтор раз в 6 ч.)\n\n"
         "<i>💡 Проверка выполняется парсером: расход токенов ИИ = 0.</i>"
     )
     
@@ -324,28 +328,24 @@ def build_ai_settings_content():
     # List of all configured profiles
     buttons = []
     for pid, prof in profiles.items():
-        is_cur = (pid == active_id)
-        p_icon = DEFAULT_TEMPLATES.get(prof.get("type", "custom"), {}).get("icon", "🤖")
-        btn_text = f"{'✅ ' if is_cur else ''}{p_icon} {prof.get('name', pid)}"
+        is_active = (pid == active_id)
+        icon = "🟢 " if is_active else "⚪️ "
+        key_icon = "🔑" if prof.get("api_key") else "❌"
+        btn_text = f"{icon}{prof.get('name', pid)} [{key_icon}]"
         buttons.append(types.InlineKeyboardButton(btn_text, callback_data=f"sel_prof:{pid}"))
         
     for i in range(0, len(buttons), 2):
         if i + 1 < len(buttons):
-            markup.row(buttons[i], buttons[i+1])
+            markup.add(buttons[i], buttons[i+1])
         else:
-            markup.row(buttons[i])
+            markup.add(buttons[i])
             
+    # Management buttons
+    markup.add(types.InlineKeyboardButton("➕ Добавить новый API", callback_data="add_new_api_menu"))
+    markup.add(types.InlineKeyboardButton("🔄 Обновить остаток лимита", callback_data="refresh_ai_limits"))
     markup.add(
-        types.InlineKeyboardButton("➕ Добавить новый API", callback_data="add_new_api_menu"),
-        types.InlineKeyboardButton("🔄 Обновить лимиты", callback_data="refresh_ai_limits")
-    )
-    markup.add(
-        types.InlineKeyboardButton("🔑 Сменить ключ", callback_data=f"edit_key:{active_id}"),
-        types.InlineKeyboardButton("🤖 Сменить модель", callback_data=f"edit_model:{active_id}")
-    )
-    markup.add(
-        types.InlineKeyboardButton("🏷 Переименовать", callback_data=f"edit_name:{active_id}"),
-        types.InlineKeyboardButton("🗑 Удалить профиль", callback_data="del_api_menu")
+        types.InlineKeyboardButton("✏️ Сменить ключ/модель", callback_data="edit_active_prof"),
+        types.InlineKeyboardButton("🗑 Удалить API", callback_data="del_api_menu")
     )
     markup.add(types.InlineKeyboardButton("🔙 Закрыть", callback_data="close_settings"))
     
@@ -604,15 +604,51 @@ def handle_callbacks(call):
     elif data.startswith("create_type:"):
         p_type = data.split(":", 1)[1]
         t_info = DEFAULT_TEMPLATES.get(p_type, DEFAULT_TEMPLATES["custom"])
-        user_states[user_id] = {"action": "wait_api_name", "type": p_type}
+        
+        if p_type == "custom":
+            user_states[user_id] = {
+                "action": "wait_custom_name",
+                "type": "custom"
+            }
+            msg = (
+                "🌐 <b>Добавление своего API (Custom)</b>\n\n"
+                "<b>Шаг 1/4:</b> Введите понятное название для этого профиля\n"
+                "(например: <code>Groq Llama 3</code> или <code>Мой Сервер</code>):"
+            )
+        else:
+            user_states[user_id] = {
+                "action": "wait_api_name",
+                "type": p_type,
+                "default_model": t_info["model"],
+                "default_base_url": t_info["base_url"]
+            }
+            msg = (
+                f"{t_info['icon']} <b>Добавление API: {t_info['name']}</b>\n\n"
+                "<b>Шаг 1/2:</b> Введите понятное название для этого ключа\n"
+                f"(например: <code>{t_info['name']} #2</code> или <code>Личный</code>):\n\n"
+                "<i>Отправьте <code>-</code>, чтобы назвать автоматически.</i>"
+            )
+        bot.edit_message_text(msg, chat_id, call.message.message_id)
+        
+    # 5. Edit active profile menu
+    elif data == "edit_active_prof":
+        cfg = load_config()
+        active_id, active_prof = get_active_profile(cfg)
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("🔑 Сменить API-ключ", callback_data=f"edit_key:{active_id}"))
+        markup.add(types.InlineKeyboardButton("🤖 Сменить модель", callback_data=f"edit_model:{active_id}"))
+        markup.add(types.InlineKeyboardButton("🏷 Переименовать профиль", callback_data=f"edit_name:{active_id}"))
+        markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_settings"))
+        
         bot.edit_message_text(
-            f"✏️ <b>Шаг 1/2: Придумайте название для нового {t_info['name']}</b>\n\n"
-            f"Отправьте название профиля следующим сообщением в этот чат (например: <code>Мой {t_info['name']}</code> или <code>-</code> для названия по умолчанию):",
+            f"✏️ <b>Редактирование профиля: {active_prof.get('name', active_id)}</b>\n\n"
+            f"Текущая модель: <code>{active_prof.get('model', '')}</code>\n\n"
+            "Что вы хотите изменить?",
             chat_id,
-            call.message.message_id
+            call.message.message_id,
+            reply_markup=markup
         )
-
-    # 5. Profile management
+        
     elif data.startswith("edit_key:"):
         prof_id = data.split(":", 1)[1]
         cfg = load_config()
@@ -694,6 +730,8 @@ def handle_callbacks(call):
         curr = cfg.get("auto_alerts_enabled", True)
         cfg["auto_alerts_enabled"] = not curr
         save_config(cfg)
+        if cfg["auto_alerts_enabled"]:
+            _monitor_wakeup_event.set()
         status_msg = "🟢 Мониторинг включен!" if cfg["auto_alerts_enabled"] else "🔴 Мониторинг выключен!"
         bot.answer_callback_query(call.id, status_msg)
         info, markup = build_alerts_settings_content(cfg)
@@ -707,6 +745,7 @@ def handle_callbacks(call):
         cfg = load_config()
         cfg["alert_interval_minutes"] = new_int
         save_config(cfg)
+        _monitor_wakeup_event.set()
         bot.answer_callback_query(call.id, f"Интервал установлен: {new_int} мин.")
         info, markup = build_alerts_settings_content(cfg)
         try:
@@ -716,11 +755,15 @@ def handle_callbacks(call):
             
     elif data == "check_alerts_now":
         bot.answer_callback_query(call.id, "🔍 Сканирую форум...")
-        alerts = check_for_alerts(force_all=True)
+        alerts, _pending = check_for_alerts(force_all=True, commit_state=False)
         if alerts:
             msg_text = "🚨 <b>РЕЗУЛЬТАТ СКАНИРОВАНИЯ ФОРУМА:</b>\n\n" + "\n\n".join(alerts)
         else:
-            msg_text = "✅ <b>Отлично! Просроченных и критически горящих тем на форуме нет.</b>"
+            last_res = _monitor_status.get("last_result", "")
+            if "Ошибка" in last_res or "гостевой" in last_res.lower():
+                msg_text = f"⚠️ <b>Не удалось просканировать форум:</b>\n<code>{html.escape(last_res)}</code>"
+            else:
+                msg_text = "✅ <b>Отлично! Просроченных и критически горящих тем на форуме нет.</b>"
         send_long_message(chat_id, msg_text)
 
     # 8. Close settings
@@ -761,118 +804,185 @@ def handle_text_interaction(message):
     if state and state.get("action") == "wait_new_key":
         p_type = state["type"]
         name = state["name"]
-        key = text
+        model = state.get("default_model", "")
+        base_url = state.get("default_base_url", "")
+        api_key = text
         
+        bot.send_message(chat_id, "⏳ Проверяю валидность ключа...")
+        ok, res_msg = test_ai_key(p_type, api_key, base_url, model)
+        
+        # Delete user's message with key
         try:
             bot.delete_message(chat_id, message.message_id)
         except:
             pass
             
-        t_info = DEFAULT_TEMPLATES.get(p_type, DEFAULT_TEMPLATES["custom"])
-        new_id = f"prof_{uuid.uuid4().hex[:8]}"
-        
+        cfg = load_config()
+        prof_id = f"prof_{uuid.uuid4().hex[:8]}"
         new_prof = {
-            "id": new_id,
+            "id": prof_id,
             "name": name,
             "type": p_type,
-            "model": t_info["model"],
-            "base_url": t_info["base_url"],
-            "api_key": key
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key
         }
-        
-        cfg = load_config()
-        cfg["ai_profiles"][new_id] = new_prof
-        cfg["active_profile_id"] = new_id
+        cfg.setdefault("ai_profiles", {})[prof_id] = new_prof
+        cfg["active_profile_id"] = prof_id
         save_config(cfg)
-        
         user_states.pop(user_id, None)
         
-        bot.send_message(chat_id, f"🎉 <b>Профиль «{name}» успешно создан и активирован!</b>")
-        info, markup = build_ai_settings_content()
-        bot.send_message(chat_id, info, reply_markup=markup)
+        limit_str = get_ai_limit_info(new_prof, cfg)
+        status_line = "✅ Ключ подтверждён!" if ok else f"⚠️ Ключ сохранён ({res_msg})"
+        
+        bot.send_message(
+            chat_id,
+            f"🎉 <b>Новый API-профиль «{name}» успешно добавлен и активирован!</b>\n\n"
+            f"📌 Статус проверки: {status_line}\n"
+            f"🤖 Модель: <code>{model}</code>\n"
+            f"📊 <b>Остаток лимита / Баланс:</b> <code>{limit_str}</code>",
+            reply_markup=get_main_keyboard(user_id)
+        )
         return
 
-    # --- FLOW: Update existing key ---
-    if state and state.get("action") == "update_key":
-        prof_id = state["prof_id"]
-        key = text
+    # --- FLOW: Add Custom API ---
+    if state and state.get("action") == "wait_custom_name":
+        state["name"] = text
+        state["action"] = "wait_custom_url"
+        bot.send_message(chat_id, "🌐 <b>Шаг 2/4:</b> Отправьте Base URL вашего OpenAI-совместимого сервиса\n(например: <code>https://api.groq.com/openai/v1</code>):")
+        return
+        
+    if state and state.get("action") == "wait_custom_url":
+        state["base_url"] = text
+        state["action"] = "wait_custom_model"
+        bot.send_message(chat_id, "🤖 <b>Шаг 3/4:</b> Отправьте название модели\n(например: <code>llama-3.3-70b-versatile</code> или <code>default</code>):")
+        return
+        
+    if state and state.get("action") == "wait_custom_model":
+        state["model"] = text
+        state["action"] = "wait_custom_key"
+        bot.send_message(chat_id, "🔑 <b>Шаг 4/4:</b> Отправьте API-ключ для этого сервиса (или любой текст, если ключ не требуется):")
+        return
+        
+    if state and state.get("action") == "wait_custom_key":
+        api_key = text
+        name = state["name"]
+        model = state["model"]
+        base_url = state["base_url"]
+        
         try:
             bot.delete_message(chat_id, message.message_id)
         except:
             pass
             
         cfg = load_config()
-        if prof_id in cfg.get("ai_profiles", {}):
-            cfg["ai_profiles"][prof_id]["api_key"] = key
-            save_config(cfg)
-            p_name = cfg["ai_profiles"][prof_id].get("name", prof_id)
-            bot.send_message(chat_id, f"✅ Ключ для «{p_name}» успешно обновлен!")
-            
+        prof_id = f"prof_{uuid.uuid4().hex[:8]}"
+        new_prof = {
+            "id": prof_id,
+            "name": name,
+            "type": "custom",
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key
+        }
+        cfg.setdefault("ai_profiles", {})[prof_id] = new_prof
+        cfg["active_profile_id"] = prof_id
+        save_config(cfg)
         user_states.pop(user_id, None)
-        info, markup = build_ai_settings_content()
-        bot.send_message(chat_id, info, reply_markup=markup)
+        
+        limit_str = get_ai_limit_info(new_prof, cfg)
+        bot.send_message(
+            chat_id,
+            f"🎉 <b>Свой API-профиль «{name}» успешно добавлен и активирован!</b>\n\n"
+            f"🤖 Модель: <code>{model}</code>\n"
+            f"🌐 URL: <code>{base_url}</code>\n"
+            f"📊 <b>Статус:</b> <code>{limit_str}</code>",
+            reply_markup=get_main_keyboard(user_id)
+        )
         return
 
-    # --- FLOW: Update model ---
+    # --- FLOW: Update existing profile ---
+    if state and state.get("action") == "update_key":
+        prof_id = state["prof_id"]
+        cfg = load_config()
+        prof = cfg.get("ai_profiles", {}).get(prof_id)
+        if prof:
+            prof["api_key"] = text
+            save_config(cfg)
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except:
+                pass
+            limit_str = get_ai_limit_info(prof, cfg)
+            bot.send_message(
+                chat_id,
+                f"✅ <b>Ключ для «{prof.get('name', prof_id)}» успешно обновлён!</b>\n\n"
+                f"📊 <b>Остаток лимита / Баланс:</b> <code>{limit_str}</code>",
+                reply_markup=get_main_keyboard(user_id)
+            )
+        user_states.pop(user_id, None)
+        return
+        
     if state and state.get("action") == "update_model":
         prof_id = state["prof_id"]
         cfg = load_config()
-        if prof_id in cfg.get("ai_profiles", {}):
-            prof = cfg["ai_profiles"][prof_id]
+        prof = cfg.get("ai_profiles", {}).get(prof_id)
+        if prof:
             prof["model"] = text
             save_config(cfg)
             bot.send_message(chat_id, f"✅ Модель для «{prof.get('name', prof_id)}» изменена на: <code>{text}</code>", reply_markup=get_main_keyboard(user_id))
         user_states.pop(user_id, None)
         return
-
-    # --- FLOW: Update name ---
+        
     if state and state.get("action") == "update_name":
         prof_id = state["prof_id"]
         cfg = load_config()
-        if prof_id in cfg.get("ai_profiles", {}):
-            cfg["ai_profiles"][prof_id]["name"] = text
+        prof = cfg.get("ai_profiles", {}).get(prof_id)
+        if prof:
+            prof["name"] = text
             save_config(cfg)
             bot.send_message(chat_id, f"✅ Профиль переименован в: <b>{text}</b>", reply_markup=get_main_keyboard(user_id))
         user_states.pop(user_id, None)
         return
 
-    # Default: Send query to Active AI
-    bot.send_chat_action(chat_id, "typing")
+    # --- Normal message -> Chat with active AI! ---
     cfg = load_config()
+    importlib.reload(ai_handler)
+    _, active_prof = ai_handler.get_active_profile(cfg)
     
-    forum_match = re.search(r'https?://forum\.blackrussia\.online/threads/([^\s]+)', text)
-    sys_prompt = None
+    bot.send_chat_action(chat_id, "typing")
+    
+    # Check if user is Toshiro Forester
+    if user_id == 1399524277:
+        sys_prompt = ai_handler.get_toshiro_admin_system_prompt()
+    else:
+        sys_prompt = "Ты умный ассистент руководства проекта Black Russia. Помогаешь отвечать на общие вопросы."
+        
     ai_prompt = text
-    
+    # Auto-fetch forum thread if link is provided
+    forum_match = re.search(r'https://forum\.blackrussia\.online/threads/[^\s]+', text)
     if forum_match:
         th_url = forum_match.group(0)
-        bot.send_message(chat_id, f"🔍 Обнаружена ссылка на тему форума. Загружаю содержимое...")
-        import requests
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Cookie": f"xf_user={cfg.get('forum_xf_user', '')}; xf_tfa_trust={cfg.get('forum_xf_tfa_trust', '')}"
-        }
-        resp = requests.get(th_url, headers=headers, timeout=15)
-        if resp.status_code == 200:
-            html_text = resp.text
-            t_m = re.search(r'<h1 class="p-title-value">([^<]+)</h1>', html_text)
+        try:
+            from forum_audit import solve_vddos_and_fetch_requests
+            th_html = solve_vddos_and_fetch_requests(th_url)
+            t_m = re.search(r'<h1 class="p-title-value">(.*?)</h1>', th_html, re.DOTALL)
             th_title = re.sub(r'<[^>]+>', '', t_m.group(1)).strip() if t_m else ""
-            a_m = re.search(r'data-author="([^"]+)"', html_text)
+            a_m = re.search(r'data-author="([^"]+)"', th_html)
             th_author = a_m.group(1) if a_m else ""
-            p_m = re.search(r'<article class="message-body[^>]*>(.*?)</article>', html_text, re.DOTALL)
+            p_m = re.search(r'<article class="message-body[^"]*">(.*?)</article>', th_html, re.DOTALL)
             th_body = re.sub(r'<[^>]+>', ' ', p_m.group(1)).replace('&nbsp;', ' ').strip() if p_m else ""
+            th_body = re.sub(r'\s+', ' ', th_body)[:2500]
             
             ai_prompt = (
-                f"Пользователь прислал ссылку на тему форума Black Russia:\n"
-                f"Название: {th_title}\n"
-                f"Автор: {th_author}\n"
-                f"Ссылка: {th_url}\n"
-                f"Текст темы:\n{th_body[:2500]}\n\n"
-                f"Вопрос пользователя: {text}\n"
-                f"Проанализируй суть темы и дай чёткий ответ или вердикт."
+                f"Тоширо прислал тему с форума: {th_url}\n"
+                f"Заголовок: {th_title}\n"
+                f"Автор темы: {th_author}\n"
+                f"Текст жалобы/обжалования:\n{th_body}\n\n"
+                f"Комментарий/вопрос Тоширо: {text}\n\n"
+                "Проанализируй данное обжалование по твоим регламентам и правилам, выдай точный вердикт (действие, префикс) и готовый текст ответа для форума."
             )
-        else:
+        except Exception:
             ai_prompt = text
 
     ai_reply = ai_handler.send_ai_query(
@@ -885,110 +995,210 @@ def handle_text_interaction(message):
 
 # --- Background Monitor & Alert System ---
 _notified_threads = {}
+_monitor_wakeup_event = threading.Event()
+_monitor_status = {
+    "last_check_msk": "Ещё не запускалась",
+    "last_result": "Ожидание запуска...",
+    "last_guest_alert_ts": 0,
+}
 
-def check_for_alerts(force_all=False):
+OVERDUE_REMINDER_SEC = 2 * 3600  # Напоминать о висящей просрочке раз в 2 часа
+GA_REMINDER_SEC = 6 * 3600       # Напоминать о теме ГА раз в 6 часов
+
+def _extract_hours_left(t_str):
+    if not t_str or "ПРОСРОЧЕНО" in t_str:
+        return None
+    if " ч." in t_str:
+        try:
+            return int(t_str.split(" ч.")[0].strip().split()[-1])
+        except Exception:
+            return None
+    if " мин." in t_str:
+        return 0
+    return None
+
+def check_for_alerts(force_all=False, commit_state=True):
     global _notified_threads
-    data = forum_runner.fetch_forum_data(skip_summaries=True)
-    if not data or data.get("error") or data.get("is_guest"):
-        return []
-        
+    now_msk = datetime.now(MSK_TZ).strftime("%d.%m %H:%M:%S МСК")
+    _monitor_status["last_check_msk"] = now_msk
+    
+    data = forum_runner.fetch_forum_data(skip_summaries=True, force_refresh=True)
+    if not data:
+        _monitor_status["last_result"] = "Ошибка: пустой ответ парсера"
+        print(f"[Monitor {now_msk}] Ошибка: пустой ответ парсера", flush=True)
+        return [], {}
+    if data.get("error"):
+        err = str(data.get("error"))[:120]
+        _monitor_status["last_result"] = f"Ошибка: {err}"
+        print(f"[Monitor {now_msk}] Ошибка: {err}", flush=True)
+        return [], {}
+    if data.get("is_guest"):
+        _monitor_status["last_result"] = "⚠️ Гостевой режим (куки форума не сработали)"
+        print(f"[Monitor {now_msk}] ⚠️ Форум открылся в гостевом режиме!", flush=True)
+        return [], {}
+    
+    total_threads = sum(
+        len(s.get("overdue", [])) + len(s.get("in_progress", []))
+        for s in data.get("sections", {}).values()
+    )
+    if total_threads == 0 and data.get("last_error"):
+        err = str(data.get("last_error"))[:120]
+        _monitor_status["last_result"] = f"Ошибка сети: {err}"
+        print(f"[Monitor {now_msk}] Ошибка сети: {err}", flush=True)
+        return [], {}
+
     now = time.time()
     new_alerts = []
+    pending_state = {}
     current_urls = set()
+    total_overdue = 0
     
     for sec_id, s in data.get("sections", {}).items():
         sec_name = forum_runner.SECTION_NAMES.get(sec_id, forum_runner.fix_mojibake(s.get("title", sec_id)))
         
-        # 1. Overdue
-        for t in s.get("overdue_threads", []):
-            url = t["url"]
+        # 1. Overdue (моментально + повторное напоминание каждые 2 часа)
+        for ov in s.get("overdue", []):
+            url = ov.get("url", "")
+            if not url:
+                continue
+            total_overdue += 1
             current_urls.add(url)
-            hours_over = int(t.get("hours_overdue", 0))
-            if force_all or (url not in _notified_threads or (now - _notified_threads[url]) > 14400):
-                _notified_threads[url] = now
-                author = forum_runner.fix_mojibake(t.get("author", "Неизвестно"))
-                title = forum_runner.fix_mojibake(t.get("title", "Без названия"))
+            prev = _notified_threads.get(url)
+            is_due = (
+                force_all
+                or not prev
+                or prev.get("type") != "overdue"
+                or (now - prev.get("time", 0) >= OVERDUE_REMINDER_SEC)
+            )
+            if is_due:
+                pending_state[url] = {"type": "overdue", "time": now}
+                title = html.escape(forum_runner.fix_mojibake(ov.get("title", "Без названия")))
+                author = html.escape(forum_runner.fix_mojibake(ov.get("author", "")))
+                t_str = ov.get("time_left_str", "")
+                prefix = html.escape(forum_runner.fix_mojibake(ov.get("prefix", ""))).strip()
+                prefix_badge = f" [🏷 <b>{prefix}</b>]" if prefix else ""
                 new_alerts.append(
-                    f"🔴 <b>ПРОСРОЧКА В РАЗДЕЛЕ: {sec_name}</b>\n"
-                    f"📌 <b>Тема:</b> <a href='{url}'>{title}</a>\n"
-                    f"👤 <b>Автор:</b> <code>{author}</code>\n"
-                    f"⏳ <b>Просрочено на:</b> {hours_over} ч. (Лимит: 24 ч.)"
+                    f"🔴 <b>[ПРОСРОЧКА] {sec_name}</b>\n"
+                    f"  ❌{prefix_badge} <a href='{url}'><b>{title}</b></a>\n"
+                    f"  👤 Автор: <code>{author}</code> | 🚨 <b>{t_str}</b>"
                 )
                 
-        # 2. Urgent (< 4 hours)
-        for t in s.get("urgent_threads", []):
-            url = t["url"]
+        # 2. Urgent (< 4 hours, повторная эскалация когда осталось < 1 часа)
+        urgent_list = forum_runner.extract_urgent_threads(s.get("in_progress", []), max_hours=4)
+        for ug in urgent_list:
+            url = ug.get("url", "")
+            if not url:
+                continue
             current_urls.add(url)
-            left_h = int(t.get("hours_left", 0))
-            if force_all or (url not in _notified_threads or (now - _notified_threads[url]) > 14400):
-                _notified_threads[url] = now
-                author = forum_runner.fix_mojibake(t.get("author", "Неизвестно"))
-                title = forum_runner.fix_mojibake(t.get("title", "Без названия"))
+            t_str = ug.get("time_left_str", "")
+            h_left = _extract_hours_left(t_str)
+            cur_type = "urgent_1h" if (h_left is not None and h_left < 1) else "urgent"
+            prev = _notified_threads.get(url)
+            is_due = (
+                force_all
+                or not prev
+                or (cur_type == "urgent_1h" and prev.get("type") == "urgent")
+            )
+            if is_due:
+                pending_state[url] = {"type": cur_type, "time": now}
+                title = html.escape(forum_runner.fix_mojibake(ug.get("title", "Без названия")))
+                author = html.escape(forum_runner.fix_mojibake(ug.get("author", "")))
+                prefix = html.escape(forum_runner.fix_mojibake(ug.get("prefix", ""))).strip()
+                prefix_badge = f" [🏷 <b>{prefix}</b>]" if prefix else ""
+                badge = "🔥 <b>[МЕНЕЕ 1 ЧАСА]</b>" if cur_type == "urgent_1h" else "⏳ <b>[ГОРЯЩИЙ ДЕДЛАЙН]</b>"
                 new_alerts.append(
-                    f"⚠️ <b>СРОЧНО! СКОРО ПРОСРОЧКА ({sec_name})</b>\n"
-                    f"📌 <b>Тема:</b> <a href='{url}'>{title}</a>\n"
-                    f"👤 <b>Автор:</b> <code>{author}</code>\n"
-                    f"⏳ <b>Осталось до дедлайна:</b> менее {left_h} ч.!"
+                    f"{badge} <b>{sec_name}</b>\n"
+                    f"  ⚠️{prefix_badge} <a href='{url}'><b>{title}</b></a>\n"
+                    f"  👤 Автор: <code>{author}</code> | ⏱ Осталось: <b>{t_str}</b>"
                 )
-                
-        # 3. GA Threads
-        for t in s.get("ga_threads", []):
-            url = t["url"]
-            current_urls.add(url)
-            if force_all or (url not in _notified_threads or (now - _notified_threads[url]) > 86400):
-                _notified_threads[url] = now
-                author = forum_runner.fix_mojibake(t.get("author", "Неизвестно"))
-                title = forum_runner.fix_mojibake(t.get("title", "Без названия"))
-                summary = forum_runner.fix_mojibake(t.get("summary", ""))
-                sum_text = f"\n📝 <b>Суть:</b> <i>{summary}</i>" if summary else ""
-                new_alerts.append(
-                    f"👑 <b>ТЕМА ГЛАВНОМУ АДМИНИСТРАТОРУ ({sec_name})</b>\n"
-                    f"📌 <b>Тема:</b> <a href='{url}'>{title}</a>\n"
-                    f"👤 <b>Автор:</b> <code>{author}</code>{sum_text}"
+
+        # 3. GA Threads (моментально + повтор раз в 6 часов)
+        if sec_id == "admin_complaints":
+            for ga in s.get("ga_threads", []):
+                url = ga.get("url", "")
+                if not url:
+                    continue
+                current_urls.add(url)
+                ga_key = f"ga_{url}"
+                prev = _notified_threads.get(ga_key)
+                is_due = (
+                    force_all
+                    or not prev
+                    or (now - prev.get("time", 0) >= GA_REMINDER_SEC)
                 )
-                
-    stale_urls = [u for u in _notified_threads if u not in current_urls and (now - _notified_threads[u]) > 86400]
-    for u in stale_urls:
-        _notified_threads.pop(u, None)
-        
-    return new_alerts
+                if is_due:
+                    pending_state[ga_key] = {"type": "ga", "time": now}
+                    title = html.escape(forum_runner.fix_mojibake(ga.get("title", "Без названия")))
+                    author = html.escape(forum_runner.fix_mojibake(ga.get("author", "")))
+                    t_str = ga.get("time_left_str", "")
+                    new_alerts.append(
+                        f"👑 <b>[ТЕМА ГА] Жалобы на администрацию</b>\n"
+                        f"  ➔ <a href='{url}'><b>{title}</b></a>\n"
+                        f"  👤 Автор: <code>{author}</code> | ⏱ Осталось: <b>{t_str}</b>"
+                    )
+
+    if commit_state and pending_state:
+        _notified_threads.update(pending_state)
+
+    if not force_all:
+        stale = [u for u in list(_notified_threads.keys()) if (u.replace("ga_", "") not in current_urls and now - _notified_threads[u]["time"] > 7200)]
+        for u in stale:
+            _notified_threads.pop(u, None)
+
+    _monitor_status["last_result"] = f"✅ ОК (тем в работе: {total_threads}, просрочек: {total_overdue}, новых алертов: {len(new_alerts)})"
+    print(f"[Monitor {now_msk}] {_monitor_status['last_result']}", flush=True)
+    return new_alerts, pending_state
 
 def background_forum_monitor():
-    while True:
-        cfg = load_config()
-        if cfg.get("auto_alerts_enabled", True):
-            try:
-                alerts = check_for_alerts(force_all=False)
-                if alerts:
-                    admins = cfg.get("admin_ids") or [1399524277, 5594041416]
-                    msg_body = "🚨 <b>ВНИМАНИЕ! ОПОВЕЩЕНИЕ ПО ФОРУМУ:</b>\n\n" + "\n\n".join(alerts)
-                    for adm_id in admins:
-                        try:
-                            send_long_message(adm_id, msg_body)
-                        except Exception as ex:
-                            print(f"[Alerts] Ошибка отправки админу {adm_id}: {ex}")
-            except Exception as e:
-                print(f"[Alerts] Ошибка фонового сканирования: {e}")
-                
-        interval = cfg.get("alert_interval_minutes", 30) * 60
-        sleep_elapsed = 0
-        while sleep_elapsed < interval:
-            time.sleep(5)
-            sleep_elapsed += 5
-
-def main():
-    print("🤖 Бот AQUA успешно запущен и готов к работе!")
-    
-    t = threading.Thread(target=background_forum_monitor, daemon=True)
-    t.start()
-    print("🔔 Фоновый мониторинг форума успешно активирован!")
-    
+    time.sleep(10)
     while True:
         try:
-            bot.infinity_polling(timeout=20, long_polling_timeout=20)
+            cfg = load_config()
+            if cfg.get("auto_alerts_enabled", True):
+                alerts, pending_state = check_for_alerts(force_all=False, commit_state=False)
+                admins = cfg.get("admin_ids") or [1399524277, 5594041416]
+                
+                # Если форум перешёл в гостевой режим — предупреждаем админа не чаще раза в 2 часа
+                if "Гостевой режим" in _monitor_status.get("last_result", ""):
+                    now_ts = time.time()
+                    if now_ts - _monitor_status.get("last_guest_alert_ts", 0) > 7200:
+                        _monitor_status["last_guest_alert_ts"] = now_ts
+                        guest_msg = (
+                            "⚠️ <b>Внимание: фоновый мониторинг форума не смог авторизоваться!</b>\n\n"
+                            "Форум открывается в режиме гостя — проверьте или обновите куки <code>FORUM_XF_USER</code>."
+                        )
+                        for aid in admins:
+                            try:
+                                send_long_message(aid, guest_msg)
+                            except Exception:
+                                pass
+                elif alerts:
+                    msg_text = "🚨🚨🚨 <b>АВТО-ОПОВЕЩЕНИЕ ПО ФОРУМУ AQUA!</b> 🚨🚨🚨\n\n" + "\n\n".join(alerts)
+                    sent_any = False
+                    for aid in admins:
+                        try:
+                            send_long_message(aid, msg_text)
+                            sent_any = True
+                            print(f"[Monitor] Алерт успешно доставлен админу {aid}", flush=True)
+                        except Exception as e_send:
+                            print(f"[Monitor] Не удалось доставить алерт админу {aid}: {e_send}", flush=True)
+                    # Засчитываем темы уведомлёнными ТОЛЬКО если хотя бы одному админу доставлено
+                    if sent_any and pending_state:
+                        _notified_threads.update(pending_state)
         except Exception as e:
-            print(f"⚠️ Ошибка polling: {e}. Перезапуск через 5 секунд...")
-            time.sleep(5)
+            print(f"[Monitor] Критическая ошибка в цикле мониторинга: {e}", flush=True)
+            _monitor_status["last_result"] = f"Ошибка цикла: {str(e)[:80]}"
+            
+        cfg = load_config()
+        interval = max(5, cfg.get("alert_interval_minutes", 30)) * 60
+        _monitor_wakeup_event.clear()
+        _monitor_wakeup_event.wait(timeout=interval)
 
 if __name__ == "__main__":
-    main()
+    print("🤖 Бот AQUA успешно запущен и готов к работе!", flush=True)
+    threading.Thread(target=background_forum_monitor, daemon=True).start()
+    print("🔔 Фоновый мониторинг форума успешно активирован!", flush=True)
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
+    except Exception as e:
+        print(f"❌ Ошибка в polling: {e}", flush=True)

@@ -30,10 +30,10 @@ def fix_mojibake(s):
             pass
     return s
 
-def fetch_forum_data(section=None, skip_summaries=True):
+def fetch_forum_data(section=None, skip_summaries=True, force_refresh=False):
     now = time.time()
     cache_key = f"{section}_{skip_summaries}"
-    if cache_key in _cache:
+    if not force_refresh and cache_key in _cache:
         cached_data, cached_at = _cache[cache_key]
         if now - cached_at < CACHE_TTL:
             return cached_data
